@@ -1,0 +1,19 @@
+# Created by venv; see https://docs.python.org/3/library/venv.html
+
+# Python
+__pycache__/
+.venv
+
+# Project structure 
+results/*
+plots/*
+!plots/scripts/
+data/*
+!data/loader/
+build/
+
+# Ignore IDE and OS files
+.DS_Store
+
+# Others
+TODO*
