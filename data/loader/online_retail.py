@@ -71,6 +71,10 @@ class OnlineRetailDataset(BaseTemporalDataset):
 
         print(f"Saved dataset to '{self.data_path}'.")
 
+    def ensure_downloaded(self) -> None:
+        if not os.path.exists(self.data_path):
+            self._download()
+
     def load_slices(self) -> List[np.ndarray]:
         if not os.path.exists(self.data_path):
             self._download()

@@ -1,15 +1,15 @@
 #!/bin/bash
 
 DATASETS=(
-  "twitter"
-  "online_retail"
-  "household_power"
-  "wildfire"
+#  "twitter"
+#  "online_retail"
+#  "household_power"
+#  "wildfire"
   "uber"
 )
 
-K_VALUES=(5 10 20)
-B_FRACTIONS=(0.0 0.01 0.1 0.5 1.0)
+K_VALUES=(5)
+B_FRACTIONS=(0.0)
 HEURISTICS=("kmedianppwpost")
 TIMESTEPS_VALUES=(30)
 
@@ -59,6 +59,35 @@ fi
 # Build once before starting parallel jobs so multiple Python processes do not
 # try to invoke make at the same time.
 make
+
+echo
+echo "Checking datasets..."
+for ds in "${DATASETS[@]}"; do
+  case "$ds" in
+    uber)
+      path="data/uber/uber-raw-data-apr14.csv"
+      [[ -f "$path" ]] || { echo "Missing '$path' - no auto-download available for uber (no stable direct URL); place the file there manually."; exit 1; }
+      ;;
+    wildfire)
+      path="data/wildfire/FPA_FOD_20170508.sqlite"
+      [[ -f "$path" ]] || { echo "Missing '$path' - no auto-download available for wildfire (no stable direct URL); place the file there manually."; exit 1; }
+      ;;
+    household_power)
+      python -c "from data.loader.household_power import HouseholdPowerDataset as D; D(data_path='data/household_power/household_power.txt').ensure_downloaded()" || exit 1
+      ;;
+    online_retail)
+      python -c "from data.loader.online_retail import OnlineRetailDataset as D; D(data_path='data/online_retail/online_retail.xlsx').ensure_downloaded()" || exit 1
+      ;;
+    twitter)
+      python -c "from data.loader.twitter import TwitterGeospatialDataset as D; D(data_path='data/twitter/twitter.csv').ensure_downloaded()" || exit 1
+      ;;
+    *)
+      echo "Unknown dataset '$ds' - add a case for it in the dataset check block."
+      exit 1
+      ;;
+  esac
+done
+echo "All datasets present."
 
 for timesteps in "${TIMESTEPS_VALUES[@]}"; do
   for ds in "${DATASETS[@]}"; do

@@ -36,7 +36,7 @@ class TwitterGeospatialDataset(BaseTemporalDataset):
         self._cached_slices = None
 
     def _download(self) -> None:
-        """Download the dataset zip from UCI and extract the .txt member to
+        """Download the dataset zip from UCI and extract the .csv member to
         exactly self.data_path (creating parent directories if needed)."""
         parent_dir = os.path.dirname(self.data_path)
         if parent_dir:
@@ -46,17 +46,34 @@ class TwitterGeospatialDataset(BaseTemporalDataset):
         with urllib.request.urlopen(DATASET_ZIP_URL) as resp:
             zip_bytes = resp.read()
 
-        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            csv_members = [n for n in zf.namelist() if n.lower().endswith('.csv')]
-            if not csv_members:
+        def _find_and_extract(zip_bytes: bytes, depth: int = 0):
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                names = zf.namelist()
+                data_members = [n for n in names if n.lower().endswith(('.csv'))]
+                if data_members:
+                    with zf.open(data_members[0]) as src:
+                        return src.read()
+
+                # No data file directly present — look for a nested zip
+                nested_zips = [n for n in names if n.lower().endswith('.zip')]
+                if nested_zips and depth < 3:  # guard against runaway recursion
+                    with zf.open(nested_zips[0]) as nested:
+                        return _find_and_extract(nested.read(), depth + 1)
+
                 raise FileNotFoundError(
-                    f"No .txt file found inside {DATASET_ZIP_URL}. "
-                    f"Archive contents: {zf.namelist()}"
+                    f"No .csv file found inside {DATASET_ZIP_URL} "
+                    f"(searched down to depth {depth}). Archive contents: {names}"
                 )
-            with zf.open(csv_members[0]) as src, open(self.data_path, 'wb') as dst:
-                dst.write(src.read())
+
+        data_bytes = _find_and_extract(zip_bytes)
+        with open(self.data_path, 'wb') as dst:
+            dst.write(data_bytes)
 
         print(f"Saved dataset to '{self.data_path}'.")
+
+    def ensure_downloaded(self) -> None:
+        if not os.path.exists(self.data_path):
+            self._download()
 
     def _load_raw(self) -> pd.DataFrame:
         # Detect whether the file already has a header row (e.g. if the
