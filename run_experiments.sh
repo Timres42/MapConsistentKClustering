@@ -45,7 +45,7 @@ echo "Running at most $MAX_JOBS experiments in parallel."
 
 # Whether to also generate plots after each dataset/timestep/k/heuristic batch.
 # Off by default. Turn on manually, for example:
-#   RUN_PLOTS=1 ./run_experiments_parallel.sh
+#   RUN_PLOTS=1 ./run_experiments.sh
 if [[ -z "${RUN_PLOTS:-}" ]]; then
   RUN_PLOTS=0
 fi

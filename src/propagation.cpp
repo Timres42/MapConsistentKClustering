@@ -160,11 +160,14 @@ int main(int argc, char** argv) {
     int n0 = P0.n;
     int b_abs0 = (int)(b_frac * n0);
     double t0_baseline_cost;
+    auto baseline_start = std::chrono::steady_clock::now();
     Clustering baseline0 = compute_baseline(P0, k, kind, reproducible, 0, t0_baseline_cost);
+    auto baseline_end = std::chrono::steady_clock::now();
+    double baseline_elapsed = std::chrono::duration<double>(baseline_end - baseline_start).count();
 
     csv.row({dataset, "1", std::to_string(n0), std::to_string(k), "baseline_heuristic",
              b_str, heur_name, std::to_string(b_abs0), "nan", fmt(t0_baseline_cost),
-             "nan", "0.0", fmt(t0_baseline_cost), "1.0"});
+             "nan", fmt(baseline_elapsed), fmt(t0_baseline_cost), "1.0"});
 
     // Per-algorithm propagated center coordinates (order matches ALGORITHMS: form, fid).
     const std::vector<std::string> ALGOS = {"form", "fid"};
@@ -204,29 +207,35 @@ int main(int argc, char** argv) {
         // Fresh baseline on the augmented instance.
         std::printf("  Computing baseline heuristic...\n");
         double best_baseline_cost;
+        baseline_start = std::chrono::steady_clock::now();
         Clustering baseline = compute_baseline(aug, k, kind, reproducible, t_idx, best_baseline_cost);
+        baseline_end = std::chrono::steady_clock::now();
+        baseline_elapsed = std::chrono::duration<double>(baseline_end - baseline_start).count();
 
         csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                  "baseline_heuristic", b_str, heur_name, std::to_string(b_abs), "nan",
-                 fmt(best_baseline_cost), "nan", "0.0", fmt(best_baseline_cost), "1.0"});
+                 fmt(best_baseline_cost), "nan", fmt(baseline_elapsed), fmt(best_baseline_cost), "1.0"});
 
         for (size_t a = 0; a < ALGOS.size(); ++a) {
             const std::string& algo = ALGOS[a];
             std::printf("  Evaluating %s...\n", algo.c_str());
 
+            auto hist_start = std::chrono::steady_clock::now();
             Clustering hist_clust = create_historical_clustering(aug, center_idx_map[a]);
+            auto hist_end = std::chrono::steady_clock::now();
+            double hist_elapsed = std::chrono::duration<double>(hist_end - hist_start).count();
             double hist_cost = hist_clust.cost();
 
             double hist_ratio = best_baseline_cost > 0 ? hist_cost / best_baseline_cost : 1.0;
             csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                      "hist_" + algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
-                     fmt(hist_cost), "0", "0.0", fmt(best_baseline_cost), fmt(hist_ratio)});
+                     fmt(hist_cost), "0", fmt(hist_elapsed), fmt(best_baseline_cost), fmt(hist_ratio)});
 
-            auto start = std::chrono::high_resolution_clock::now();
+            auto start = std::chrono::steady_clock::now();
             MappedClustering result = (algo == "form")
                 ? poly_lcc_median_fct(aug, k, hist_clust, b_abs, baseline)
                 : poly_lcc_median_f_id(aug, k, hist_clust, b_abs, baseline);
-            auto end = std::chrono::high_resolution_clock::now();
+            auto end = std::chrono::steady_clock::now();
             double elapsed = std::chrono::duration<double>(end - start).count();
 
             double result_cost = result.clustering.cost();

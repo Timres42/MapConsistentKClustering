@@ -147,6 +147,8 @@ Each row of the results CSV is one (timestep, method) evaluation, with columns: 
 historical clustering, or `form`/`fid` for the algorithm's result), `b_fraction`, the heuristic
 used, `b_abs_available`, `historical_cost`, `result_cost`, `b_abs_used`, `execution_time`,
 `baseline_cost`, and `relative_cost_ratio` (cost normalized to the fresh baseline).
+`execution_time` is measured in seconds for each row's method, including the baseline heuristic,
+historical clustering, `form`, and `fid`.
 
 ### Plotting for the paper
 
