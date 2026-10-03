@@ -1,10 +1,10 @@
 #!/bin/bash
 
 DATASETS=(
-#  "twitter"
-#  "online_retail"
-#  "household_power"
-#  "wildfire"
+  "twitter"
+  "online_retail"
+  "household_power"
+  "wildfire"
   "uber"
 )
 
