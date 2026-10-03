@@ -128,6 +128,8 @@ def main():
     parser.add_argument("--dataset", type=str, default="uber",
                         help="Dataset identifier ('uber', 'wildfire', 'household_power', 'online_retail', 'twitter')")
     parser.add_argument("--k", type=int, default=3, help="Number of clusters")
+    parser.add_argument("--num_kernels", type=int, default=1,
+                        help="Number of kernels/jobs to record in the output filename")
     parser.add_argument("--b_fraction", type=float, default=0.2,
                         help="Budget fraction (b / n) - recalculated per timestep")
     parser.add_argument("--timesteps", type=int, default=10,
@@ -152,10 +154,11 @@ def main():
     drift_sequence = load_drift_sequence(args.dataset, args.k, seed, args.timesteps)
     print(f"Loaded {len(drift_sequence)} timesteps with k={args.k}")
 
-    # Output CSV path (unchanged naming).
+    # Output CSV path records cluster count separately from kernel count.
     output_file = os.path.join(
         args.results_dir,
-        f"[{args.timesteps}]_{args.dataset}_k{args.k}_base-{args.heuristic}_b{args.b_fraction}.csv")
+        f"[{args.timesteps}]_{args.dataset}_k{args.k}_kernels{args.num_kernels}"
+        f"_base-{args.heuristic}_b{args.b_fraction}.csv")
 
     # Serialize the sequence and run the C++ core.
     binary = ensure_binary()

@@ -1,8 +1,11 @@
 #!/bin/bash
 
+NUM_KERNELS="${NUM_KERNELS:-1}"
+
 python plots/scripts/plots_propagation_ratio_bviolin_multiple.py \
   --dataset wildfire \
   --k 5 \
+  --num_kernels "$NUM_KERNELS" \
   --timesteps 30 \
   --b_values 0.0 0.1 0.5
 
@@ -10,6 +13,7 @@ python plots/scripts/plots_propagation_ratio_bviolin_multiple.py \
 python plots/scripts/plots_propagation_ratio_multiple.py \
   --datasets wildfire online_retail\
   --k_values 10 20 \
+  --num_kernels "$NUM_KERNELS" \
   --timesteps 30 \
   --global_y_max 1.75
 
@@ -18,6 +22,7 @@ for k in 5 10 20; do
     python plots/scripts/plots_propagation_ratio_bviolin_multiple.py \
       --dataset $dataset \
       --k $k \
+      --num_kernels "$NUM_KERNELS" \
       --timesteps 30 \
       --b_values 0.0 0.01 0.1 0.5 1.0
   done

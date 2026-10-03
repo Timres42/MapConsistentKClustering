@@ -87,18 +87,33 @@ FIG_WSPACE = 0.12
 ROW_TITLE_OFFSET = 0.05  # horizontal gap between a row's left axis and its rotated label
 
 
-def csv_path_for(results_dir: str, dataset: str, k: int, timesteps: int, heuristic: str, b: float) -> Path:
-    filename = f"[{timesteps}]_{dataset}_k{k}_base-{heuristic}_b{b}.csv"
+def csv_path_for(
+    results_dir: str,
+    dataset: str,
+    k: int,
+    timesteps: int,
+    heuristic: str,
+    b: float,
+    num_kernels: int = 1,
+) -> Path:
+    filename = f"[{timesteps}]_{dataset}_k{k}_kernels{num_kernels}_base-{heuristic}_b{b}.csv"
     return Path(results_dir) / dataset / filename
 
 
 def load_dataframes(
-    results_dir: str, dataset: str, k: int, timesteps: int, heuristic: str
+    results_dir: str,
+    dataset: str,
+    k: int,
+    timesteps: int,
+    heuristic: str,
+    num_kernels: int = 1,
 ) -> Dict[float, pd.DataFrame]:
     dataframes: Dict[float, pd.DataFrame] = {}
 
     for b in B_FRACTIONS:
-        csv_path = csv_path_for(results_dir, dataset, k, timesteps, heuristic, b)
+        csv_path = csv_path_for(
+            results_dir, dataset, k, timesteps, heuristic, b, num_kernels
+        )
 
         if not csv_path.exists():
             raise FileNotFoundError(f"Missing CSV for dataset={dataset}, k={k}, b={b}: {csv_path}")
@@ -316,6 +331,7 @@ def main() -> None:
         ),
     )
     parser.add_argument("--timesteps", required=True, type=int)
+    parser.add_argument("--num_kernels", default=1, type=int)
     parser.add_argument("--heuristic", default="kmedianppwpost")
     parser.add_argument("--results_dir", default="results/propagation")
     parser.add_argument("--output_dir", default="plots/paper")
@@ -370,7 +386,14 @@ def main() -> None:
 
     # Load all data first, so a missing/broken CSV fails fast before any plotting work.
     all_data = {
-        (dataset, k): load_dataframes(args.results_dir, dataset, k, args.timesteps, args.heuristic)
+        (dataset, k): load_dataframes(
+            args.results_dir,
+            dataset,
+            k,
+            args.timesteps,
+            args.heuristic,
+            args.num_kernels,
+        )
         for dataset, k in combinations
     }
 

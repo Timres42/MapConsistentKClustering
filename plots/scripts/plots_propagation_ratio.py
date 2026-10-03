@@ -37,17 +37,17 @@ DATASET_NAMES = {
 }
 
 
-def csv_path_for(results_dir, dataset, k, timesteps, heuristic, b):
-    filename = f"[{timesteps}]_{dataset}_k{k}_base-{heuristic}_b{b}.csv"
+def csv_path_for(results_dir, dataset, k, timesteps, heuristic, b, num_kernels=1):
+    filename = f"[{timesteps}]_{dataset}_k{k}_kernels{num_kernels}_base-{heuristic}_b{b}.csv"
     return Path(results_dir) / dataset / filename
 
 
-def load_dataframes(results_dir, dataset, k, timesteps, heuristic):
+def load_dataframes(results_dir, dataset, k, timesteps, heuristic, num_kernels=1):
     dataframes = {}
 
     for b in B_FRACTIONS:
         csv_path = csv_path_for(
-            results_dir, dataset, k, timesteps, heuristic, b
+            results_dir, dataset, k, timesteps, heuristic, b, num_kernels
         )
 
         if not csv_path.exists():
@@ -176,6 +176,7 @@ def main():
     )
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--k", required=True, type=int)
+    parser.add_argument("--num_kernels", default=1, type=int)
     parser.add_argument("--timesteps", required=True, type=int)
     parser.add_argument("--heuristic", default="kmedianppwpost")
     parser.add_argument("--results_dir", default="results/propagation")
@@ -195,6 +196,7 @@ def main():
         args.k,
         args.timesteps,
         args.heuristic,
+        args.num_kernels,
     )
 
     y_min, y_max = compute_shared_y_limits(dataframes)

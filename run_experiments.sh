@@ -109,6 +109,7 @@ for timesteps in "${TIMESTEPS_VALUES[@]}"; do
             --b_fraction "$b" \
             --timesteps "$timesteps" \
             --heuristic "$heur" \
+            --num_kernels "$MAX_JOBS" \
             --no_plot \
             --results_dir "$RESULTS_DIR/$ds" &
 
@@ -136,7 +137,7 @@ for timesteps in "${TIMESTEPS_VALUES[@]}"; do
           csv_files=()
 
           for b in "${B_FRACTIONS[@]}"; do
-            csv="$RESULTS_DIR/$ds/[${timesteps}]_${ds}_k${k}_base-${heur}_b${b}.csv"
+            csv="$RESULTS_DIR/$ds/[${timesteps}]_${ds}_k${k}_kernels${MAX_JOBS}_base-${heur}_b${b}.csv"
 
             if [[ -f "$csv" ]]; then
               csv_files+=("$csv")
@@ -189,7 +190,7 @@ PY
 
           # Plot sequentially to avoid adding unnecessary CPU and memory load.
           for b in "${B_FRACTIONS[@]}"; do
-            csv="$RESULTS_DIR/$ds/[${timesteps}]_${ds}_k${k}_base-${heur}_b${b}.csv"
+            csv="$RESULTS_DIR/$ds/[${timesteps}]_${ds}_k${k}_kernels${MAX_JOBS}_base-${heur}_b${b}.csv"
 
             if [[ ! -f "$csv" ]]; then
               echo "Skipping missing file: $csv"

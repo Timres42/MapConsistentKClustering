@@ -64,12 +64,14 @@ DATASET_NAMES = {
 }
 
 
-def csv_path_for(results_dir, dataset, k, timesteps, heuristic, b):
-    filename = f"[{timesteps}]_{dataset}_k{k}_base-{heuristic}_b{b}.csv"
+def csv_path_for(results_dir, dataset, k, timesteps, heuristic, b, num_kernels=1):
+    filename = f"[{timesteps}]_{dataset}_k{k}_kernels{num_kernels}_base-{heuristic}_b{b}.csv"
     return Path(results_dir) / dataset / filename
 
 
-def load_dataframes(results_dir, dataset, k, timesteps, heuristic, b_values):
+def load_dataframes(
+    results_dir, dataset, k, timesteps, heuristic, b_values, num_kernels=1
+):
     dataframes = {}
 
     for b in b_values:
@@ -80,6 +82,7 @@ def load_dataframes(results_dir, dataset, k, timesteps, heuristic, b_values):
             timesteps,
             heuristic,
             b,
+            num_kernels,
         )
 
         if not path.exists():
@@ -301,6 +304,12 @@ def main():
         help="Number of timesteps.",
     )
     parser.add_argument(
+        "--num_kernels",
+        default=1,
+        type=int,
+        help="Kernel/job count included in the input CSV filenames.",
+    )
+    parser.add_argument(
         "--b_values",
         nargs="+",
         required=True,
@@ -337,6 +346,7 @@ def main():
         k=args.k,
         timesteps=args.timesteps,
         heuristic=args.heuristic,
+        num_kernels=args.num_kernels,
         b_values=args.b_values,
     )
 

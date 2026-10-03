@@ -117,7 +117,9 @@ python -m src.propagation_setup \
 
 Key arguments (see `propagation_setup.py`'s `argparse` block for the full list and defaults):
 - `--dataset`: one of `uber`, `wildfire`, `household_power`, `online_retail`, `twitter`
-- `--k`: number of clusters
+- `--k`: number of clusters/centers (unrelated to the kernel count in filenames)
+- `--num_kernels`: kernel/job count to record in the output filename (default: `1`; the
+  batch runner sets it to `MAX_JOBS`)
 - `--b_fraction`: reassignment budget as a fraction of points per timestep, recomputed per timestep
 - `--timesteps`: number of sequential timesteps to evaluate
 - `--heuristic`: `kmedian_plus_plus` or `kmedianppwpost` (default; these are the only two
@@ -125,7 +127,8 @@ Key arguments (see `propagation_setup.py`'s `argparse` block for the full list a
 - `--results_dir` / `--plots_dir`: output locations (default `results/propagation`, `plots/out`)
 - `--no_plot`: skip plotting after the run
 
-This writes a CSV to `<results_dir>/[<timesteps>]_<dataset>_k<k>_base-<heuristic>_b<b_fraction>.csv`
+This writes a CSV to
+`<results_dir>/[<timesteps>]_<dataset>_k<k>_kernels<num_kernels>_base-<heuristic>_b<b_fraction>.csv`
 and, unless `--no_plot` is given, plots it with `plots_propagation_ratio_bviolin.py`.
 
 ### Batch experiments
@@ -139,6 +142,10 @@ bash run_experiments.sh
 # Customize parallelism and enable plotting after each batch:
 MAX_JOBS=4 RUN_PLOTS=1 ./run_experiments.sh
 ```
+
+The batch runner records `MAX_JOBS` in each CSV filename as `_kernels<MAX_JOBS>`.
+To plot these batch results later with `run_plots_for_paper.sh`, pass the same value
+through `NUM_KERNELS` (for example, `NUM_KERNELS=4 bash plots/scripts/run_plots_for_paper.sh`).
 
 ### Output format
 
