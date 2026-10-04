@@ -168,9 +168,9 @@ def main():
     cmd = [binary, "--data", data_path, "--out", output_file,
            "--dataset", args.dataset, "--k", str(args.k),
            "--b_fraction", str(args.b_fraction), "--heuristic", args.heuristic]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # stdout is not captured so the C++ progress output reaches the terminal live.
+    result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
-        print("STDOUT:", result.stdout)
         print("STDERR:", result.stderr)
         print(f"Binary failed, inspect data at: {data_path}")
         raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=result.stderr)

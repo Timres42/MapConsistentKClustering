@@ -16,10 +16,12 @@
 #include "form.hpp"
 #include "fid.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <chrono>
 #include <cmath>
@@ -132,6 +134,51 @@ static Clustering create_historical_clustering(const Points& P, const std::vecto
     return Clustering(P, center_indices, assignment);
 }
 
+// ---- coordinate matching between consecutive instances ---------------------
+// Points are identified by their exact coordinates. For every distinct coordinate
+// we store how many points of the instance carry it, split by cluster label.
+using LabelCounts = std::unordered_map<std::string, std::vector<int>>;
+
+static std::string point_key(const Points& P, int p) {
+    std::string key(sizeof(double) * P.d, '\0');
+    for (int j = 0; j < P.d; ++j) {
+        double v = P.row(p)[j] + 0.0;  // maps -0.0 to +0.0
+        std::memcpy(&key[sizeof(double) * j], &v, sizeof(double));
+    }
+    return key;
+}
+
+static LabelCounts count_labels(const Points& P, const std::vector<int>& assignment, int k) {
+    LabelCounts counts;
+    counts.reserve((size_t)P.n);
+    for (int p = 0; p < P.n; ++p) {
+        std::vector<int>& c = counts[point_key(P, p)];
+        if (c.empty()) c.assign(k, 0);
+        c[assignment[p]]++;
+    }
+    return counts;
+}
+
+// Every point of the new instance whose coordinates already occur in the previous
+// instance is counted. It counts as changed if no point with these coordinates had
+// its new label in the previous instance (for unique coordinates: its label differs).
+struct MatchStats { int matched = 0; int changed = 0; };
+
+static MatchStats compare_labels(const LabelCounts& prev, const LabelCounts& curr) {
+    MatchStats s;
+    for (const auto& kv : curr) {
+        auto it = prev.find(kv.first);
+        if (it == prev.end()) continue;
+        const std::vector<int>& a = it->second;
+        const std::vector<int>& b = kv.second;
+        for (size_t l = 0; l < b.size(); ++l) {
+            s.matched += b[l];
+            if (a[l] == 0) s.changed += b[l];
+        }
+    }
+    return s;
+}
+
 int main(int argc, char** argv) {
     std::string data_path = get_arg(argc, argv, "--data", "");
     std::string out_path  = get_arg(argc, argv, "--out", "out.csv");
@@ -178,6 +225,11 @@ int main(int argc, char** argv) {
             std::memcpy(&coords[(size_t)c * P0.d], P0.row(baseline0.centers[c]), sizeof(double) * P0.d);
         algo_coords[a] = std::move(coords);
     }
+
+    // FORM's labels on the previous instance X_{i-1}, grouped by coordinates. Labels
+    // index FORM's centers, which are propagated in the same order, so label c in
+    // X_{i-1} is label c of the historical clustering in X_i.
+    LabelCounts form_prev_labels = count_labels(P0, baseline0.assignment, k);
 
     // --- Propagate across timesteps ---
     for (int t_idx = 1; t_idx < T; ++t_idx) {
@@ -226,6 +278,15 @@ int main(int argc, char** argv) {
             double hist_elapsed = std::chrono::duration<double>(hist_end - hist_start).count();
             double hist_cost = hist_clust.cost();
 
+            if (algo == "form") {
+                MatchStats ms = compare_labels(form_prev_labels,
+                                               count_labels(aug, hist_clust.assignment, k));
+                std::printf("  FORM: %d of %d points in X_%d have coordinates already in X_%d; "
+                            "%d of them changed their center through the instance creation\n",
+                            ms.matched, aug.n, t_idx, t_idx - 1, ms.changed);
+                std::fflush(stdout);
+            }
+
             double hist_ratio = best_baseline_cost > 0 ? hist_cost / best_baseline_cost : 1.0;
             csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                      "hist_" + algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
@@ -241,6 +302,10 @@ int main(int argc, char** argv) {
             double result_cost = result.clustering.cost();
             int c_dist = cluster_distance(hist_clust, result.clustering, result.mapping);
             double relative_ratio = best_baseline_cost > 0 ? result_cost / best_baseline_cost : 1.0;
+
+            // Remember FORM's final labels on X_i for the next instance creation.
+            if (algo == "form")
+                form_prev_labels = count_labels(aug, result.clustering.assignment, k);
 
             csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                      algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
