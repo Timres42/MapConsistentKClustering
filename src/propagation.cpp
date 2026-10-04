@@ -200,7 +200,8 @@ int main(int argc, char** argv) {
     CsvWriter csv{f};
     csv.row({"dataset", "timestep", "num_points", "k", "method", "b_fraction",
              "baseline/sigma used", "b_abs_available", "historical_cost", "result_cost",
-             "b_abs_used", "execution_time", "baseline_cost", "relative_cost_ratio"});
+             "b_abs_used", "execution_time", "baseline_cost", "relative_cost_ratio",
+             "prev_points", "prev_points_changed"});
 
     // --- Timestep 1: fresh baseline only ---
     const Points& P0 = seq[0];
@@ -214,7 +215,7 @@ int main(int argc, char** argv) {
 
     csv.row({dataset, "1", std::to_string(n0), std::to_string(k), "baseline_heuristic",
              b_str, heur_name, std::to_string(b_abs0), "nan", fmt(t0_baseline_cost),
-             "nan", fmt(baseline_elapsed), fmt(t0_baseline_cost), "1.0"});
+             "nan", fmt(baseline_elapsed), fmt(t0_baseline_cost), "1.0", "nan", "nan"});
 
     // Per-algorithm propagated center coordinates (order matches ALGORITHMS: form, fid).
     const std::vector<std::string> ALGOS = {"form", "fid"};
@@ -266,7 +267,7 @@ int main(int argc, char** argv) {
 
         csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                  "baseline_heuristic", b_str, heur_name, std::to_string(b_abs), "nan",
-                 fmt(best_baseline_cost), "nan", fmt(baseline_elapsed), fmt(best_baseline_cost), "1.0"});
+                 fmt(best_baseline_cost), "nan", fmt(baseline_elapsed), fmt(best_baseline_cost), "1.0", "nan", "nan"});
 
         for (size_t a = 0; a < ALGOS.size(); ++a) {
             const std::string& algo = ALGOS[a];
@@ -278,19 +279,21 @@ int main(int argc, char** argv) {
             double hist_elapsed = std::chrono::duration<double>(hist_end - hist_start).count();
             double hist_cost = hist_clust.cost();
 
+            // Points of X_i whose coordinates already occur in X_{i-1}, and how many of
+            // them changed their FORM center through the instance creation. Written to
+            // the CSV in the "form" row (nan in all other rows).
+            std::string form_prev_points = "nan", form_prev_changed = "nan";
             if (algo == "form") {
                 MatchStats ms = compare_labels(form_prev_labels,
                                                count_labels(aug, hist_clust.assignment, k));
-                std::printf("  FORM: %d of %d points in X_%d have coordinates already in X_%d; "
-                            "%d of them changed their center through the instance creation\n",
-                            ms.matched, aug.n, t_idx, t_idx - 1, ms.changed);
-                std::fflush(stdout);
+                form_prev_points  = std::to_string(ms.matched);
+                form_prev_changed = std::to_string(ms.changed);
             }
 
             double hist_ratio = best_baseline_cost > 0 ? hist_cost / best_baseline_cost : 1.0;
             csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                      "hist_" + algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
-                     fmt(hist_cost), "0", fmt(hist_elapsed), fmt(best_baseline_cost), fmt(hist_ratio)});
+                     fmt(hist_cost), "0", fmt(hist_elapsed), fmt(best_baseline_cost), fmt(hist_ratio), "nan", "nan"});
 
             auto start = std::chrono::steady_clock::now();
             MappedClustering result = (algo == "form")
@@ -310,7 +313,8 @@ int main(int argc, char** argv) {
             csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                      algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
                      fmt(result_cost), std::to_string(c_dist), fmt(elapsed),
-                     fmt(best_baseline_cost), fmt(relative_ratio)});
+                     fmt(best_baseline_cost), fmt(relative_ratio),
+                     form_prev_points, form_prev_changed});
 
             // Propagate this algorithm's resulting centers to the next timestep.
             std::vector<double> coords((size_t)k * d);

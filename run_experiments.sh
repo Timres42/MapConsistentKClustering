@@ -8,7 +8,7 @@ DATASETS=(
   "uber"
 )
 
-K_VALUES=(15)
+K_VALUES=(5 10 15 20)
 B_FRACTIONS=(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 HEURISTICS=("kmedianppwpost")
 TIMESTEPS_VALUES=(30)
