@@ -1,11 +1,11 @@
-"""Print statistics on how the instance creation changes FORM's center assignments.
+"""Write statistics on how instance creation changes FORM's center assignments.
 
 Reads the results CSVs in results/propagation/<dataset>/ and uses the columns
 `prev_points` (points of X_i whose coordinates already occur in X_{i-1}) and
 `prev_points_changed` (how many of them changed their FORM center when X_i was
 built), which are only filled in the `method == "form"` rows.
 
-For each dataset, each k and each b_fraction it prints over all timesteps:
+For each dataset, each k and each b_fraction it reports over all timesteps:
   - points still there:  mean, standard deviation, max
   - points changed:      mean, standard deviation, max
 each as an absolute number and as a percentage of all points of the instance
@@ -13,11 +13,14 @@ each as an absolute number and as a percentage of all points of the instance
 the per-timestep percentages).
 
 Usage (from anywhere):
-    python plots/scripts/evaluate_center_changes.py
-    python plots/scripts/evaluate_center_changes.py --datasets uber wildfire --k 5 10
+    python plots/scripts/plots_propagation_point_changes.py
+    python plots/scripts/plots_propagation_point_changes.py --datasets uber wildfire --k 5 10
+
+The report is written to plots/propagation/changed_points_analysis.txt by default.
 """
 
 import argparse
+from contextlib import redirect_stdout
 import glob
 import os
 
@@ -25,6 +28,9 @@ import pandas as pd
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_RESULTS = os.path.join(REPO_ROOT, "results", "propagation")
+DEFAULT_OUTPUT = os.path.join(
+    REPO_ROOT, "plots", "propagation", "changed_points_analysis.txt"
+)
 DEFAULT_K = [5, 10, 15, 20]
 
 
@@ -69,46 +75,53 @@ def main():
     parser.add_argument("--datasets", nargs="*", default=None,
                         help="Datasets to evaluate (default: every subdirectory)")
     parser.add_argument("--k", nargs="*", type=int, default=DEFAULT_K, help="k values to report")
+    parser.add_argument("--output", default=DEFAULT_OUTPUT,
+                        help="Path to the report file")
     args = parser.parse_args()
 
-    if args.datasets:
-        datasets = args.datasets
-    else:
-        datasets = sorted(d for d in os.listdir(args.results_dir)
-                          if os.path.isdir(os.path.join(args.results_dir, d)))
-    if not datasets:
-        print(f"No dataset directories found in {args.results_dir}")
-        return
+    output_dir = os.path.dirname(os.path.abspath(args.output))
+    os.makedirs(output_dir, exist_ok=True)
+    with open(args.output, "w") as output_file, redirect_stdout(output_file):
+        if args.datasets:
+            datasets = args.datasets
+        else:
+            datasets = sorted(d for d in os.listdir(args.results_dir)
+                              if os.path.isdir(os.path.join(args.results_dir, d)))
+        if not datasets:
+            print(f"No dataset directories found in {args.results_dir}")
+        else:
+            for dataset in datasets:
+                print("\n" + "=" * 128)
+                print(f"Dataset: {dataset}")
+                print("=" * 128)
+                files = sorted(glob.glob(os.path.join(args.results_dir, dataset, "*.csv")))
+                frames = [f for f in (load_form_rows(p) for p in files)
+                          if f is not None and not f.empty]
+                if not frames:
+                    print("  no results with center-change columns")
+                    continue
+                data = pd.concat(frames, ignore_index=True)
 
-    for dataset in datasets:
-        print("\n" + "=" * 128)
-        print(f"Dataset: {dataset}")
-        print("=" * 128)
-        files = sorted(glob.glob(os.path.join(args.results_dir, dataset, "*.csv")))
-        frames = [f for f in (load_form_rows(p) for p in files) if f is not None and not f.empty]
-        if not frames:
-            print("  no results with center-change columns")
-            continue
-        data = pd.concat(frames, ignore_index=True)
-
-        for k in args.k:
-            sub_k = data[data["k"] == k]
-            print(f"\nk = {k}")
-            if sub_k.empty:
-                print("  no results")
-                continue
-            print(HEADER)
-            for b in sorted(sub_k["b_fraction"].unique()):
-                rows = sub_k[sub_k["b_fraction"] == b]
-                sources = rows["source"].unique()
-                if len(sources) > 1:
-                    print(f"  [note] b={b}: timesteps pooled from {len(sources)} files: {', '.join(sources)}")
-                kept = rows["prev_points"].astype(float)
-                changed = rows["prev_points_changed"].astype(float)
-                total = rows["num_points"].astype(float)
-                print(fmt_row(f"{b:g}", len(rows),
-                              stats(kept), stats(100.0 * kept / total),
-                              stats(changed), stats(100.0 * changed / total)))
+                for k in args.k:
+                    sub_k = data[data["k"] == k]
+                    print(f"\nk = {k}")
+                    if sub_k.empty:
+                        print("  no results")
+                        continue
+                    print(HEADER)
+                    for b in sorted(sub_k["b_fraction"].unique()):
+                        rows = sub_k[sub_k["b_fraction"] == b]
+                        sources = rows["source"].unique()
+                        if len(sources) > 1:
+                            print(f"  [note] b={b}: timesteps pooled from {len(sources)} files: "
+                                  f"{', '.join(sources)}")
+                        kept = rows["prev_points"].astype(float)
+                        changed = rows["prev_points_changed"].astype(float)
+                        total = rows["num_points"].astype(float)
+                        print(fmt_row(f"{b:g}", len(rows),
+                                      stats(kept), stats(100.0 * kept / total),
+                                      stats(changed), stats(100.0 * changed / total)))
+    print(f"Analysis saved to: {args.output}")
 
 
 if __name__ == "__main__":
