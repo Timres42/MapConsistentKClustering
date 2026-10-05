@@ -198,8 +198,9 @@ int main(int argc, char** argv) {
     double opt_time_limit = std::stod(get_arg(argc, argv, "--opt_time_limit", "3600"));
     double opt_mip_gap    = std::stod(get_arg(argc, argv, "--opt_mip_gap", "0"));
     int    opt_threads    = std::stoi(get_arg(argc, argv, "--opt_threads", "0"));  // 0 = all cores
+    std::string opt_formulation = get_arg(argc, argv, "--opt_formulation", "benders");  // or "classic"
 #ifndef USE_GUROBI
-    (void)opt_time_limit; (void)opt_mip_gap; (void)opt_threads;
+    (void)opt_time_limit; (void)opt_mip_gap; (void)opt_threads; (void)opt_formulation;
     if (use_opt) {
         std::fprintf(stderr, "--opt requires a build with Gurobi (-DUSE_GUROBI), see opt.hpp\n");
         return 1;
@@ -240,7 +241,8 @@ int main(int argc, char** argv) {
         std::printf("  Computing exact k-median (opt) for timestep 1...\n");
         OptInfo info;
         MappedClustering opt0 = opt_lcc_median_center_identity(
-            P0, k, nullptr, n0, {baseline0.centers}, opt_time_limit, opt_mip_gap, opt_threads, info);
+            P0, k, nullptr, n0, {baseline0.centers}, opt_time_limit, opt_mip_gap, opt_threads, info,
+            opt_formulation);
         init_clust = opt0.clustering;
         double opt0_cost = init_clust.cost();
         csv.row({dataset, "1", std::to_string(n0), std::to_string(k), "opt",
@@ -346,11 +348,16 @@ int main(int argc, char** argv) {
                 OptInfo info;
                 opt_starts.push_back(hist_clust.centers);
                 result = opt_lcc_median_center_identity(aug, k, &hist_clust, b_abs, opt_starts,
-                                                        opt_time_limit, opt_mip_gap, opt_threads, info);
+                                                        opt_time_limit, opt_mip_gap, opt_threads, info,
+                                                        opt_formulation);
                 opt_optimal = info.optimal ? "1" : "0";
                 opt_gap = fmt(info.mip_gap);
                 opt_budget_used = info.budget_used;
-                std::printf("    opt: status %d, gap %.3g, %.1fs\n", info.status, info.mip_gap, info.runtime);
+                std::printf("    opt (%s): status %d, gap %.3g, %.1fs", opt_formulation.c_str(),
+                            info.status, info.mip_gap, info.runtime);
+                if (opt_formulation == "benders")
+                    std::printf(" (LP %.1fs, %d rounds, %ld cuts)", info.lp_time, info.lp_rounds, info.cuts);
+                std::printf("\n");
 #endif
             }
             auto end = std::chrono::steady_clock::now();

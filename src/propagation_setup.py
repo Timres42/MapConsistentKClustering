@@ -162,6 +162,9 @@ def main():
                         help="Relative MIP gap at which Gurobi stops (0 = proven optimum)")
     parser.add_argument("--opt_threads", type=int, default=0,
                         help="Gurobi threads per opt solve (0 = all cores)")
+    parser.add_argument("--opt_formulation", choices=["benders", "classic"], default="benders",
+                        help="MIP formulation for opt: 'benders' (3n variables, cuts on demand; default) "
+                             "or 'classic' (n^2 + n variables; for cross-checking)")
     parser.add_argument("--no_plot", action="store_true",
                         help="Skip generating the plot after the experiment finishes")
     args = parser.parse_args()
@@ -191,7 +194,8 @@ def main():
            "--dataset", args.dataset, "--k", str(args.k),
            "--b_fraction", str(args.b_fraction), "--heuristic", args.heuristic,
            "--opt", str(args.opt).lower(), "--opt_time_limit", str(args.opt_time_limit),
-           "--opt_mip_gap", str(args.opt_mip_gap), "--opt_threads", str(args.opt_threads)]
+           "--opt_mip_gap", str(args.opt_mip_gap), "--opt_threads", str(args.opt_threads),
+           "--opt_formulation", args.opt_formulation]
     # stdout is not captured so the C++ progress output reaches the terminal live.
     result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:

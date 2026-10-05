@@ -60,8 +60,9 @@ earlier Python-only implementation.
   - `fid.hpp`: The `fid` algorithm (`poly_lcc_median_f_id`) - identity-mapped, regret-ranked
     budgeted reassignment
   - `opt.hpp`: The `opt` algorithm (`opt_lcc_median_center_identity`) - exact optimum of the
-    center-identity variant as a MIP solved with Gurobi's C API; only compiled with
-    `-DUSE_GUROBI` (set by the `Makefile` when `GUROBI_HOME` is set)
+    center-identity variant, solved with Gurobi's C API via a Benders/radius formulation with
+    on-demand cuts (default) or the classic assignment MIP; only compiled with `-DUSE_GUROBI`
+    (set by the `Makefile` when `GUROBI_HOME` is set)
   - `clustering_classes.py`: `ClusteringInstance` (used to hand points/k/seed to the pipeline)
     plus legacy `Clustering`/`ClusteringWithMapping` dataclasses (see note above)
   - `drift_classes.py`: `BaseTemporalDataset` (adapter interface) and `TemporalDriftPipeline`
@@ -121,7 +122,7 @@ the library it finds there:
 export GUROBI_HOME=/Library/gurobi1300/macos_universal2   # macOS (adjust the version)
 export GUROBI_HOME=/opt/gurobi1300/linux64                 # Linux
 make            # prints "Built with Gurobi (gurobi130): --opt available"
-make test-opt   # optional: check opt against brute force on small instances
+make test-opt   # optional: check both opt formulations against brute force
 ```
 
 Gurobi also needs a valid license (`grbgetkey`, or `GRB_LICENSE_FILE`). The pip license that
@@ -168,6 +169,8 @@ Key arguments (see `propagation_setup.py`'s `argparse` block for the full list a
 - `--opt_time_limit`: Gurobi time limit in seconds per `opt` solve (default `3600`)
 - `--opt_mip_gap`: relative MIP gap at which Gurobi stops (default `0` = proven optimum)
 - `--opt_threads`: Gurobi threads per solve (default `0` = all cores)
+- `--opt_formulation`: `benders` (default) or `classic`, see
+  [Exact optimum (opt)](#exact-optimum-opt)
 
 This writes a CSV to
 `<results_dir>/[<timesteps>]_<dataset>_k<k>_kernels<num_kernels>_base-<heuristic>_b<b_fraction>.csv`
@@ -193,8 +196,8 @@ Environment variables for `opt`:
 - `RUN_OPT=1`: pass `--opt` to every run. These results go to `results/propagation_opt` and
   `plots/propagation_opt` (override with `RESULTS_DIR` / `PLOTS_DIR`), because `opt` changes
   the initial clustering and the instances of all algorithms (see below).
-- `OPT_TIME_LIMIT` (default `3600`), `OPT_MIP_GAP` (default `0`): passed to `--opt_time_limit`
-  and `--opt_mip_gap`.
+- `OPT_TIME_LIMIT` (default `3600`), `OPT_MIP_GAP` (default `0`), `OPT_FORMULATION` (default
+  `benders`): passed to `--opt_time_limit`, `--opt_mip_gap` and `--opt_formulation`.
 - `OPT_THREADS`: Gurobi threads per run; defaults to `CPU cores / MAX_JOBS` so the parallel runs
   do not compete for the same cores.
 
@@ -211,16 +214,38 @@ assignment with minimum k-median cost such that at most `b` points are not assig
 historical center point. A point whose historical center is replaced counts against the budget
 even if it stays in the "same" cluster.
 
-`opt.hpp` solves this as a MIP (every point is a candidate center):
+`opt.hpp` offers two exact formulations (`--opt_formulation`); both reach the same optimum.
+
+**`benders` (default)** - a Benders/radius formulation after Duran-Mateluna, Ales & Elloumi,
+*An efficient Benders decomposition for the p-median problem* (EJOR 2023), extended by the
+budget. It has only `3n` variables: `y_j` (point `j` is a center, binary), `s_i` (point `i`
+stays at its historical center) and `theta_i` (cost of point `i`):
+
+```
+min  sum_i theta_i
+s.t. sum_j y_j = k,    s_i <= y_{h(i)},    sum_i s_i >= n - b
+     theta_i >= D - sum_{j: d(i,j) < D} (D - d(i,j)) y_j + [D < d(i,h(i))] (d(i,h(i)) - D) s_i
+                                                              for every distance threshold D
+```
+
+For integer `y` the strongest cut gives exactly the cost of point `i`: `d(i,h(i))` if it stays,
+otherwise the distance to the nearest open center (and the linear interpolation for fractional
+`s_i`). Only `y` is binary: for fixed `y` the remaining problem in `s` (keep at least `n - b`
+points, unit weights) has an integral LP optimum. The cuts are generated on demand - first in
+a cutting-plane loop on the LP relaxation, then by a Gurobi callback (lazy constraints at new
+incumbents, user cuts at fractional nodes). Memory: two `n x n` tables of sorted neighbors
+(about 40 MB at `n = 1750`).
+
+**`classic`** - the compact assignment MIP with `n^2 + n` variables, kept for cross-checking:
 
 ```
 min  sum_ij d(i,j) x_ij
-s.t. sum_j x_ij = 1               for every point i
-     x_ij <= y_j                  for every i, j
-     sum_j y_j = k
-     sum_i x_{i,h(i)} >= n - b
+s.t. sum_j x_ij = 1,  x_ij <= y_j,  sum_j y_j = k,  sum_i x_{i,h(i)} >= n - b
      y_j, x_{i,h(i)} binary; all other x_ij in [0, 1]
 ```
+
+At `n = 1750` its LP relaxation alone needs several GB of memory per run and often does not
+finish within typical time limits, so prefer `benders`.
 
 The best feasible center set among the historical, baseline, `form` and `fid` solutions of the
 timestep is passed to Gurobi as a start solution. The final assignment is recomputed exactly for
@@ -233,9 +258,10 @@ With `--opt`:
 - **Later timesteps**: `opt` propagates its own centers like `form` and `fid`, so each X_i
   also contains `opt`'s `k` previous centers. Results with and without `--opt` are therefore not
   directly comparable.
-- **Scale**: the model has `n^2 + n` variables and about `n^2` constraints. Exact solves are
-  practical for instances up to a few thousand points; use `--opt_time_limit` and check
-  `opt_optimal` / `opt_mip_gap` in the CSV.
+- **Scale**: with `benders`, instances of a few thousand points are practical; the time goes
+  into branch-and-bound over the `k`-out-of-`n` center choice. Use `--opt_time_limit` and check
+  `opt_optimal` / `opt_mip_gap` in the CSV. The progress line per solve shows the LP phase
+  (`LP <seconds>, <rounds> rounds, <cuts> cuts`).
 
 ### Output format
 

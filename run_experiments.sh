@@ -1,10 +1,10 @@
 #!/bin/bash
 
 DATASETS=(
-  "wildfire"
-  "uber"
   "online_retail"
   "household_power"
+  #"wildfire"
+  #"uber"
   "twitter"
 )
 
@@ -21,6 +21,7 @@ TIMESTEPS_VALUES=(30)
 RUN_OPT="${RUN_OPT:-0}"
 OPT_TIME_LIMIT="${OPT_TIME_LIMIT:-3600}"   # seconds per Gurobi solve
 OPT_MIP_GAP="${OPT_MIP_GAP:-0}"            # 0 = solve to proven optimality
+OPT_FORMULATION="${OPT_FORMULATION:-benders}"  # benders (fast, default) or classic (n^2 variables)
 
 if [[ "$RUN_OPT" == "1" ]]; then
   RESULTS_DIR="${RESULTS_DIR:-results/propagation_opt}"
@@ -66,8 +67,9 @@ if [[ "$RUN_OPT" == "1" ]]; then
     OPT_THREADS=$((CPU_COUNT / MAX_JOBS))
     (( OPT_THREADS < 1 )) && OPT_THREADS=1
   fi
-  OPT_ARGS=(--opt --opt_time_limit "$OPT_TIME_LIMIT" --opt_mip_gap "$OPT_MIP_GAP" --opt_threads "$OPT_THREADS")
-  echo "opt is ENABLED (time limit ${OPT_TIME_LIMIT}s, MIP gap $OPT_MIP_GAP, $OPT_THREADS Gurobi threads per job)."
+  OPT_ARGS=(--opt --opt_time_limit "$OPT_TIME_LIMIT" --opt_mip_gap "$OPT_MIP_GAP" --opt_threads "$OPT_THREADS"
+            --opt_formulation "$OPT_FORMULATION")
+  echo "opt is ENABLED ($OPT_FORMULATION formulation, time limit ${OPT_TIME_LIMIT}s, MIP gap $OPT_MIP_GAP, $OPT_THREADS Gurobi threads per job)."
   echo "Results: $RESULTS_DIR, plots: $PLOTS_DIR"
 else
   echo "opt is DISABLED (set RUN_OPT=1 to enable)."
