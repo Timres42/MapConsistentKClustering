@@ -193,14 +193,23 @@ int main(int argc, char** argv) {
     //uint64_t seed   = (uint64_t)std::stoll(get_arg(argc, argv, "--seed", "42"));
     bool reproducible = parse_bool(get_arg(argc, argv, "--reproducible", "true"));
     HeuristicKind kind = parse_heuristic(heur_name);
-    // OPT: exact optimum of the center-identity variant (needs Gurobi, see opt.hpp).
+    // Exact reference algorithms (need Gurobi, see opt.hpp):
+    //   opt_fid - optimum of the center-identity variant (the problem FID solves)
+    //   opt_mc  - optimum of the mapping variant (the problem FORM solves)
     bool use_opt          = parse_bool(get_arg(argc, argv, "--opt", "false"));
+    std::string opt_algos = get_arg(argc, argv, "--opt_algos", "fid,mc");
+    const bool run_opt_fid = use_opt && opt_algos.find("fid") != std::string::npos;
+    const bool run_opt_mc  = use_opt && opt_algos.find("mc") != std::string::npos;
+    if (use_opt && !run_opt_fid && !run_opt_mc) {
+        std::fprintf(stderr, "--opt_algos must contain fid and/or mc (got '%s')\n", opt_algos.c_str());
+        return 1;
+    }
     double opt_time_limit = std::stod(get_arg(argc, argv, "--opt_time_limit", "3600"));
     double opt_mip_gap    = std::stod(get_arg(argc, argv, "--opt_mip_gap", "0"));
     int    opt_threads    = std::stoi(get_arg(argc, argv, "--opt_threads", "0"));  // 0 = all cores
     std::string opt_formulation = get_arg(argc, argv, "--opt_formulation", "benders");  // or "classic"
 #ifndef USE_GUROBI
-    (void)opt_time_limit; (void)opt_mip_gap; (void)opt_threads; (void)opt_formulation;
+    (void)opt_time_limit; (void)opt_mip_gap; (void)opt_threads; (void)opt_formulation; (void)run_opt_fid; (void)run_opt_mc;
     if (use_opt) {
         std::fprintf(stderr, "--opt requires a build with Gurobi (-DUSE_GUROBI), see opt.hpp\n");
         return 1;
@@ -234,18 +243,17 @@ int main(int argc, char** argv) {
              "nan", fmt(baseline_elapsed), fmt(t0_baseline_cost), "1.0", "nan", "nan"});
 
     // Initial clustering propagated by every algorithm: the k-median++ baseline, or
-    // with --opt the exact k-median optimum of the first timestep.
+    // with --opt the exact k-median optimum of the first timestep (row "opt_kmedian").
     Clustering init_clust = baseline0;
 #ifdef USE_GUROBI
     if (use_opt) {
-        std::printf("  Computing exact k-median (opt) for timestep 1...\n");
+        std::printf("  Computing exact k-median (opt_kmedian) for timestep 1...\n");
         OptInfo info;
-        MappedClustering opt0 = opt_lcc_median_center_identity(
-            P0, k, nullptr, n0, {baseline0.centers}, opt_time_limit, opt_mip_gap, opt_threads, info,
-            opt_formulation);
+        MappedClustering opt0 = opt_kmedian(P0, k, {baseline0.centers}, opt_time_limit, opt_mip_gap,
+                                            opt_threads, info, opt_formulation);
         init_clust = opt0.clustering;
         double opt0_cost = init_clust.cost();
-        csv.row({dataset, "1", std::to_string(n0), std::to_string(k), "opt",
+        csv.row({dataset, "1", std::to_string(n0), std::to_string(k), "opt_kmedian",
                  b_str, heur_name, std::to_string(b_abs0), "nan", fmt(opt0_cost),
                  "nan", fmt(info.runtime), fmt(t0_baseline_cost),
                  fmt(t0_baseline_cost > 0 ? opt0_cost / t0_baseline_cost : 1.0),
@@ -255,7 +263,8 @@ int main(int argc, char** argv) {
 
     // Per-algorithm propagated center coordinates (order matches ALGOS).
     std::vector<std::string> ALGOS = {"form", "fid"};
-    if (use_opt) ALGOS.push_back("opt");
+    if (run_opt_fid) ALGOS.push_back("opt_fid");
+    if (run_opt_mc) ALGOS.push_back("opt_mc");
     std::vector<std::vector<double>> algo_coords(ALGOS.size());  // each k*d, laid out row-major
     for (size_t a = 0; a < ALGOS.size(); ++a) {
         std::vector<double> coords((size_t)k * P0.d);
@@ -345,17 +354,23 @@ int main(int argc, char** argv) {
                 result = poly_lcc_median_f_id(aug, k, hist_clust, b_abs, baseline);
             } else {
 #ifdef USE_GUROBI
+                // MIP start candidates: historical, baseline and this timestep's other results.
                 OptInfo info;
-                opt_starts.push_back(hist_clust.centers);
-                result = opt_lcc_median_center_identity(aug, k, &hist_clust, b_abs, opt_starts,
-                                                        opt_time_limit, opt_mip_gap, opt_threads, info,
-                                                        opt_formulation);
+                std::vector<std::vector<int>> starts = opt_starts;
+                starts.push_back(hist_clust.centers);
+                const bool classic = (algo == "opt_fid" && opt_formulation == "classic");
+                if (algo == "opt_fid")
+                    result = opt_fid(aug, k, hist_clust, b_abs, starts, opt_time_limit, opt_mip_gap,
+                                     opt_threads, info, opt_formulation);
+                else
+                    result = opt_mc(aug, k, hist_clust, b_abs, starts, opt_time_limit, opt_mip_gap,
+                                    opt_threads, info);
                 opt_optimal = info.optimal ? "1" : "0";
                 opt_gap = fmt(info.mip_gap);
                 opt_budget_used = info.budget_used;
-                std::printf("    opt (%s): status %d, gap %.3g, %.1fs", opt_formulation.c_str(),
+                std::printf("    %s%s: status %d, gap %.3g, %.1fs", algo.c_str(), classic ? " (classic)" : "",
                             info.status, info.mip_gap, info.runtime);
-                if (opt_formulation == "benders")
+                if (!classic)
                     std::printf(" (LP %.1fs, %d rounds, %ld cuts)", info.lp_time, info.lp_rounds, info.cuts);
                 std::printf("\n");
 #endif
@@ -365,9 +380,10 @@ int main(int argc, char** argv) {
             opt_starts.push_back(result.clustering.centers);
 
             double result_cost = result.clustering.cost();
-            // For opt, b_abs_used is the variant's budget: points whose center point changed.
-            int c_dist = (algo == "opt") ? opt_budget_used
-                                         : cluster_distance(hist_clust, result.clustering, result.mapping);
+            // b_abs_used is each algorithm's own budget: label changes under its mapping
+            // (form, fid, opt_mc) or changed center points (opt_fid).
+            int c_dist = (algo.rfind("opt_", 0) == 0) ? opt_budget_used
+                                                      : cluster_distance(hist_clust, result.clustering, result.mapping);
             double relative_ratio = best_baseline_cost > 0 ? result_cost / best_baseline_cost : 1.0;
 
             // Remember FORM's final labels on X_i for the next instance creation.

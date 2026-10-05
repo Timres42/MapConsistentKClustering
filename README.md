@@ -3,8 +3,9 @@
 A research prototype for label-consistent clustering under mapping, evaluated on temporal
 drift datasets via **center propagation**. Python loads and slices a dataset into a sequence
 of timesteps; a compiled C++ core does the actual clustering (heuristics, the two
-label-consistent algorithms `form` and `fid`, optionally the exact optimum `opt` of the
-center-identity variant via Gurobi, and cost bookkeeping) and writes a results CSV;
+label-consistent algorithms `form` and `fid`, optionally the exact algorithms `opt_mc` and
+`opt_fid` - the optima of the problems FORM and FID solve heuristically - via Gurobi, and cost
+bookkeeping) and writes a results CSV;
 Python optionally plots it.
 
 ## How it works (architecture)
@@ -20,8 +21,8 @@ The heavy computation lives in C++, not Python:
    timestep: computes a fresh heuristic baseline clustering, builds a historical clustering
    by assigning the current points to each algorithm's *previous* timestep centers, runs
    `form` (`form.hpp`, knapsack-based reassignment, `knapsack.hpp`), `fid` (`fid.hpp`,
-   identity-mapped reassignment) and, with `--opt`, `opt` (`opt.hpp`, exact MIP via Gurobi,
-   see [Exact optimum (opt)](#exact-optimum-opt)) under a point budget
+   identity-mapped reassignment) and, with `--opt`, `opt_mc` / `opt_fid` (`opt.hpp`, exact via
+   Gurobi, see [Exact algorithms](#exact-algorithms-opt_mc-opt_fid)) under a point budget
    `b_abs = b_fraction * n`, and appends a row per (timestep, method) to the output CSV. Each
    algorithm's resulting centers are then propagated forward to seed the next timestep's
    historical clustering.
@@ -39,15 +40,17 @@ earlier Python-only implementation.
 - `README.md`: Project documentation
 - `Makefile`: Builds `build/propagation` from `src/propagation.cpp` and `src/include/*.hpp`,
   with Gurobi enabled automatically when `GUROBI_HOME` is set; `make test-opt` runs the
-  brute-force check of `opt`
+  brute-force check of the exact algorithms
 - `run_experiments.sh`: Batch-runs `src.propagation_setup` across datasets, `k` values, and
-  budget fractions, optionally in parallel, optionally with `opt` (`RUN_OPT=1`) and optionally
+  budget fractions, optionally in parallel, optionally with `opt_mc` / `opt_fid` (`RUN_OPT=1`) and optionally
   plotting afterwards
-- `tests/test_opt.cpp`: Compares `opt` with brute-force enumeration on small random instances
+- `tests/test_opt.cpp`: Compares `opt_kmedian`, `opt_fid` (both formulations) and `opt_mc` with
+  brute-force enumeration on small random instances, and checks `opt_mc <= opt_fid`,
+  `opt_mc <= FORM` and `opt_fid <= FID` for the same historical clustering
 
 ### `src/` - C++ core + Python driver
 - `propagation.cpp`: Entry point of the compiled core. Loads the binary drift sequence, runs
-  the baseline heuristic, `form`, `fid` and (with `--opt`) `opt` per timestep with center
+  the baseline heuristic, `form`, `fid` and (with `--opt`) `opt_fid` / `opt_mc` per timestep with center
   propagation, writes the CSV.
 - `propagation_setup.py`: Python driver - dataset loading, serialization, invoking the C++
   binary, and (optionally) plotting. Run as `python -m src.propagation_setup ...`.
@@ -59,10 +62,11 @@ earlier Python-only implementation.
   - `form.hpp`: The `form` algorithm (`poly_lcc_median_fct`) - knapsack-based budgeted reassignment
   - `fid.hpp`: The `fid` algorithm (`poly_lcc_median_f_id`) - identity-mapped, regret-ranked
     budgeted reassignment
-  - `opt.hpp`: The `opt` algorithm (`opt_lcc_median_center_identity`) - exact optimum of the
-    center-identity variant, solved with Gurobi's C API via a Benders/radius formulation with
-    on-demand cuts (default) or the classic assignment MIP; only compiled with `-DUSE_GUROBI`
-    (set by the `Makefile` when `GUROBI_HOME` is set)
+  - `opt.hpp`: The exact algorithms `opt_mc` (optimum of FORM's problem), `opt_fid` (optimum
+    of FID's problem) and `opt_kmedian` (exact k-median, timestep 1), solved with Gurobi's C API
+    via a Benders/radius formulation with on-demand cuts; `opt_fid` can also use the classic
+    assignment MIP. Only compiled with `-DUSE_GUROBI` (set by the `Makefile` when `GUROBI_HOME`
+    is set)
   - `clustering_classes.py`: `ClusteringInstance` (used to hand points/k/seed to the pipeline)
     plus legacy `Clustering`/`ClusteringWithMapping` dataclasses (see note above)
   - `drift_classes.py`: `BaseTemporalDataset` (adapter interface) and `TemporalDriftPipeline`
@@ -78,7 +82,12 @@ earlier Python-only implementation.
   existed in X_{i-1} and how many of them changed their FORM center through the instance
   creation (mean, standard deviation, max; absolute and in % of all points)
 - `plots_propagation_ratio_bviolin.py`: Used by `propagation_setup.py` and `run_experiments.sh`
-  to plot `relative_cost_ratio` per method as violin plots for a given budget fraction
+  to plot `relative_cost_ratio` per method (line, box and budget-used violin plot) for a given
+  budget fraction; includes `opt_fid` (green) and `opt_mc` (red) with their historical
+  clusterings when present (hollow markers where Gurobi hit the time limit; the timestep-1
+  `opt_kmedian` row is left out; older results with method `opt` are read as `opt_fid`)
+- `compare_runtimes.py`: Compares the runtime of `form`, `fid`, `opt_fid` and `opt_mc` per dataset, `k` and
+  `b` (terminal table plus log-scale figures, see [Comparing runtimes](#comparing-runtimes))
 - `plots_propagation_ratio_bviolin_multiple.py`, `plots_propagation_ratio_multiple.py`: Used by
   `run_plots_for_paper.sh` to build multi-panel figures across several runs at once
 - `plots_propagation_ratio.py`: Not currently invoked by any script - an older, single-panel
@@ -110,9 +119,9 @@ but the binary was built without Gurobi), but you can also build it directly:
 make
 ```
 
-### Optional: Gurobi (only for `opt`)
+### Optional: Gurobi (only for `opt_mc` / `opt_fid`)
 
-`opt` needs [Gurobi](https://www.gurobi.com) (version 10 or newer; free academic licenses are
+The exact algorithms need [Gurobi](https://www.gurobi.com) (version 10 or newer; free academic licenses are
 available). The build uses Gurobi's **C API** (`libgurobiXYZ`), so the separate C++ wrapper
 library is not needed. Point `GUROBI_HOME` at the installation's platform directory (the one
 containing `include/` and `lib/`); the `Makefile` then compiles with `-DUSE_GUROBI` and links
@@ -122,7 +131,7 @@ the library it finds there:
 export GUROBI_HOME=/Library/gurobi1300/macos_universal2   # macOS (adjust the version)
 export GUROBI_HOME=/opt/gurobi1300/linux64                 # Linux
 make            # prints "Built with Gurobi (gurobi130): --opt available"
-make test-opt   # optional: check both opt formulations against brute force
+make test-opt   # optional: check the exact algorithms against brute force
 ```
 
 Gurobi also needs a valid license (`grbgetkey`, or `GRB_LICENSE_FILE`). The pip license that
@@ -164,13 +173,14 @@ Key arguments (see `propagation_setup.py`'s `argparse` block for the full list a
   heuristics implemented in `heuristics.hpp`)
 - `--results_dir` / `--plots_dir`: output locations (default `results/propagation`, `plots/out`)
 - `--no_plot`: skip plotting after the run
-- `--opt`: also run `opt` (needs a Gurobi build, see above and
-  [Exact optimum (opt)](#exact-optimum-opt))
-- `--opt_time_limit`: Gurobi time limit in seconds per `opt` solve (default `3600`)
+- `--opt`: also run the exact algorithms (needs a Gurobi build, see above and
+  [Exact algorithms](#exact-algorithms-opt_mc-opt_fid))
+- `--opt_algos`: which exact algorithms to run with `--opt`: `mc`, `fid` or `fid,mc` (default)
+- `--opt_time_limit`: Gurobi time limit in seconds per solve (default `3600`)
 - `--opt_mip_gap`: relative MIP gap at which Gurobi stops (default `0` = proven optimum)
 - `--opt_threads`: Gurobi threads per solve (default `0` = all cores)
-- `--opt_formulation`: `benders` (default) or `classic`, see
-  [Exact optimum (opt)](#exact-optimum-opt)
+- `--opt_formulation`: `benders` (default) or `classic` for `opt_fid` / `opt_kmedian`, see
+  [Exact algorithms](#exact-algorithms-opt_mc-opt_fid)
 
 This writes a CSV to
 `<results_dir>/[<timesteps>]_<dataset>_k<k>_kernels<num_kernels>_base-<heuristic>_b<b_fraction>.csv`
@@ -188,16 +198,17 @@ bash run_experiments.sh
 # Customize parallelism and enable plotting after each batch:
 MAX_JOBS=4 RUN_PLOTS=1 ./run_experiments.sh
 
-# Include opt (needs GUROBI_HOME, see Requirements):
+# Include the exact algorithms (needs GUROBI_HOME, see Requirements):
 RUN_OPT=1 OPT_TIME_LIMIT=1800 ./run_experiments.sh
 ```
 
-Environment variables for `opt`:
+Environment variables for the exact algorithms:
 - `RUN_OPT=1`: pass `--opt` to every run. These results go to `results/propagation_opt` and
-  `plots/propagation_opt` (override with `RESULTS_DIR` / `PLOTS_DIR`), because `opt` changes
+  `plots/propagation_opt` (override with `RESULTS_DIR` / `PLOTS_DIR`), because `--opt` changes
   the initial clustering and the instances of all algorithms (see below).
-- `OPT_TIME_LIMIT` (default `3600`), `OPT_MIP_GAP` (default `0`), `OPT_FORMULATION` (default
-  `benders`): passed to `--opt_time_limit`, `--opt_mip_gap` and `--opt_formulation`.
+- `OPT_ALGOS` (default `fid,mc`), `OPT_TIME_LIMIT` (default `3600`), `OPT_MIP_GAP` (default
+  `0`), `OPT_FORMULATION` (default `benders`): passed to `--opt_algos`, `--opt_time_limit`,
+  `--opt_mip_gap` and `--opt_formulation`.
 - `OPT_THREADS`: Gurobi threads per run; defaults to `CPU cores / MAX_JOBS` so the parallel runs
   do not compete for the same cores.
 
@@ -205,83 +216,96 @@ The batch runner records `MAX_JOBS` in each CSV filename as `_kernels<MAX_JOBS>`
 To plot these batch results later with `run_plots_for_paper.sh`, pass the same value
 through `NUM_KERNELS` (for example, `NUM_KERNELS=4 bash plots/scripts/run_plots_for_paper.sh`).
 
-### Exact optimum (opt)
+### Exact algorithms (opt_mc, opt_fid)
 
-`opt` is the exact optimum of the **center-identity variant** of label-consistent k-median,
-the problem `fid` approximates heuristically: given the historical clustering (every point `p`
-has a historical center *point* `h(p)`) and the budget `b`, find `k` center points and an
-assignment with minimum k-median cost such that at most `b` points are not assigned to their
-historical center point. A point whose historical center is replaced counts against the budget
-even if it stays in the "same" cluster.
+Both exact algorithms get the same input as the heuristics: the historical clustering (every
+point of X_i assigned to the nearest of the algorithm's previous centers) and the budget `b`.
 
-`opt.hpp` offers two exact formulations (`--opt_formulation`); both reach the same optimum.
+**`opt_mc` - optimum of FORM's problem (mapping variant).** Find `k` center points, an
+assignment `sigma` and a function `f` from the historical clusters to the new centers (the
+*anchor* of each historical cluster; not necessarily injective) with minimum k-median cost such
+that at most `b` points change their assignment modulo `f`, i.e. `sigma(p) != f(H(p))`.
+For a fixed center set the best anchors and movers follow from exactly FORM's multiple-choice
+knapsack; FORM is therefore optimal for the baseline's centers, and `opt_mc` additionally
+optimizes the center set. `opt_mc <= FORM` for the same historical clustering.
 
-**`benders` (default)** - a Benders/radius formulation after Duran-Mateluna, Ales & Elloumi,
+**`opt_fid` - optimum of FID's problem (center-identity variant).** Every point `p` has its
+historical center *point* `h(p)`; at most `b` points may end up at a different center point.
+A point whose historical center is replaced counts against the budget even if it stays in the
+"same" cluster. `opt_mc <= opt_fid <= FID` for the same historical clustering (FID only when it
+stays within this budget, see below).
+
+**Formulation.** Both use a Benders/radius formulation after Duran-Mateluna, Ales & Elloumi,
 *An efficient Benders decomposition for the p-median problem* (EJOR 2023), extended by the
-budget. It has only `3n` variables: `y_j` (point `j` is a center, binary), `s_i` (point `i`
-stays at its historical center) and `theta_i` (cost of point `i`):
+budget: `y_j` = point `j` is a center (binary), `theta_i` = cost of point `i`, `s_i` = point `i`
+stays (continuous), and for `opt_mc` `z_cj` = `j` is the anchor of historical cluster `c` (binary).
 
 ```
-min  sum_i theta_i
-s.t. sum_j y_j = k,    s_i <= y_{h(i)},    sum_i s_i >= n - b
-     theta_i >= D - sum_{j: d(i,j) < D} (D - d(i,j)) y_j + [D < d(i,h(i))] (d(i,h(i)) - D) s_i
-                                                              for every distance threshold D
+opt_fid:  min sum_i theta_i
+          s.t. sum_j y_j = k,   s_i <= y_{h(i)},   sum_i s_i >= n - b
+               theta_i >= D - sum_{j: d(i,j) < D} (D - d(i,j)) y_j
+                             + [D < d(i,h(i))] (d(i,h(i)) - D) s_i                 for all D
+
+opt_mc:   min sum_i theta_i
+          s.t. sum_j y_j = k,   sum_j z_cj = 1,   z_cj <= y_j,   sum_i s_i >= n - b
+               theta_i >= D1 - sum_j (D1 - d(i,j))^+ y_j + (D2 - D1) s_i
+                             - sum_j [(D2 - d(i,j))^+ - (D1 - d(i,j))^+] z_{c(i)j}   for all D1 <= D2
 ```
 
-For integer `y` the strongest cut gives exactly the cost of point `i`: `d(i,h(i))` if it stays,
-otherwise the distance to the nearest open center (and the linear interpolation for fractional
-`s_i`). Only `y` is binary: for fixed `y` the remaining problem in `s` (keep at least `n - b`
-points, unit weights) has an integral LP optimum. The cuts are generated on demand - first in
-a cutting-plane loop on the LP relaxation, then by a Gurobi callback (lazy constraints at new
-incumbents, user cuts at fractional nodes). Memory: two `n x n` tables of sorted neighbors
-(about 40 MB at `n = 1750`).
+The `opt_mc` inequalities are the LP duals of the per-point assignment subproblem (with `z`
+fixed to the historical center point they reduce to the `opt_fid` ones). For integral `y` (and
+`z`) the strongest inequality gives exactly the cost of a point: distance to its historical
+center / anchor if it stays, to the nearest center if it moves. `s` can stay continuous: for
+fixed `y` (and `z`) the remaining problem (keep at least `n - b` points, unit weights) has an
+integral LP optimum. The inequalities are generated on demand - first in a cutting-plane loop
+on the LP relaxation, then by a Gurobi callback (lazy constraints at incumbents, user cuts at
+fractional nodes). Model size: `3n` variables plus `k*n` anchor variables for `opt_mc`; memory
+mainly two `n x n` neighbor tables (about 40 MB at `n = 1750`).
 
-**`classic`** - the compact assignment MIP with `n^2 + n` variables, kept for cross-checking:
+`opt_fid` (and `opt_kmedian`) can alternatively use the compact assignment MIP with `n^2 + n`
+variables (`--opt_formulation classic`), kept for cross-checking - at `n = 1750` its LP
+relaxation alone needs several GB of memory per run and often does not finish in time.
 
-```
-min  sum_ij d(i,j) x_ij
-s.t. sum_j x_ij = 1,  x_ij <= y_j,  sum_j y_j = k,  sum_i x_{i,h(i)} >= n - b
-     y_j, x_{i,h(i)} binary; all other x_ij in [0, 1]
-```
-
-At `n = 1750` its LP relaxation alone needs several GB of memory per run and often does not
-finish within typical time limits, so prefer `benders`.
-
-The best feasible center set among the historical, baseline, `form` and `fid` solutions of the
-timestep is passed to Gurobi as a start solution. The final assignment is recomputed exactly for
-the chosen centers (forced moves for replaced centers, the remaining budget to the largest savings).
+The best feasible solution among the historical, baseline and this timestep's other results is
+passed to Gurobi as a start solution (for `opt_mc` including `opt_fid`'s result). The final
+clustering is recomputed exactly for the chosen centers.
 
 With `--opt`:
-- **Timestep 1**: `opt` computes the exact (unconstrained) k-median of X_1. This clustering,
-  instead of the k-median++ baseline, is the initial historical clustering of **all**
-  algorithms (`form`, `fid`, `opt`), and it is written as an `opt` row for timestep 1.
-- **Later timesteps**: `opt` propagates its own centers like `form` and `fid`, so each X_i
-  also contains `opt`'s `k` previous centers. Results with and without `--opt` are therefore not
-  directly comparable.
-- **Scale**: with `benders`, instances of a few thousand points are practical; the time goes
-  into branch-and-bound over the `k`-out-of-`n` center choice. Use `--opt_time_limit` and check
-  `opt_optimal` / `opt_mip_gap` in the CSV. The progress line per solve shows the LP phase
-  (`LP <seconds>, <rounds> rounds, <cuts> cuts`).
+- **Timestep 1**: the exact (unconstrained) k-median of X_1 (`opt_kmedian`) replaces the
+  k-median++ baseline as the initial clustering of **all** algorithms, and is written as an
+  `opt_kmedian` row for timestep 1.
+- **Later timesteps**: `opt_fid` and `opt_mc` propagate their own centers like `form` and
+  `fid`, so each X_i also contains their previous centers. Results with and without `--opt`
+  (or with different `--opt_algos`) are therefore not directly comparable.
+- **Scale**: instances of a few thousand points are practical; the time goes into
+  branch-and-bound over the center choice (for `opt_mc` also the anchors). Use
+  `--opt_time_limit` and check `opt_optimal` / `opt_mip_gap` in the CSV. The progress line per
+  solve shows the LP phase (`LP <seconds>, <rounds> rounds, <cuts> cuts`).
+- **FID and its budget**: FID can exceed the center-identity budget (it allows up to `budget`
+  extra moves on top of the points of replaced clusters), so in those timesteps it is not
+  comparable to `opt_fid`.
 
 ### Output format
 
 Each row of the results CSV is one (timestep, method) evaluation, with columns: `dataset`,
-`timestep`, `num_points`, `k`, `method` (`baseline_heuristic`, `hist_form`/`hist_fid`/`hist_opt`
-for the historical clustering, or `form`/`fid`/`opt` for the algorithm's result), `b_fraction`,
+`timestep`, `num_points`, `k`, `method` (`baseline_heuristic`; `hist_form`/`hist_fid`/
+`hist_opt_fid`/`hist_opt_mc` for the historical clustering; `form`/`fid`/`opt_fid`/`opt_mc` for
+the algorithm's result; `opt_kmedian` for the exact k-median of timestep 1), `b_fraction`,
 the heuristic used, `b_abs_available`, `historical_cost`, `result_cost`, `b_abs_used`,
 `execution_time`, `baseline_cost`, `relative_cost_ratio` (cost normalized to the fresh
 baseline), and:
 - `prev_points`, `prev_points_changed` (only in `form` rows): points of X_i whose coordinates
   already occur in X_{i-1}, and how many of them changed their FORM center through the
   instance creation (nearest-center assignment to the propagated centers)
-- `opt_optimal`, `opt_mip_gap` (only in `opt` rows): `1` if Gurobi proved optimality (`0` if
-  stopped by the time limit), and the final relative MIP gap
+- `opt_optimal`, `opt_mip_gap` (only in `opt_kmedian`/`opt_fid`/`opt_mc` rows): `1` if Gurobi
+  proved optimality (`0` if stopped by the time limit), and the final relative MIP gap
 
 All other cells of these columns are `nan`. `execution_time` is measured in seconds for each
-row's method, including the baseline heuristic, historical clustering, `form`, `fid` and `opt`.
-For `form`/`fid`, `b_abs_used` counts points whose label changed under the algorithm's mapping;
-for `opt` it counts points whose center point differs from their historical center point (the
-variant's budget).
+row's method, including the baseline heuristic, historical clustering and all algorithms.
+`b_abs_used` is each algorithm's own budget: for `form`, `fid` and `opt_mc` the points whose
+label changed under the algorithm's mapping; for `opt_fid` the points whose center point
+differs from their historical center point. (Results from before the rename call `opt_fid`
+just `opt`.)
 
 ### Evaluating center changes from the instance creation
 
@@ -292,8 +316,23 @@ python plots/scripts/evaluate_center_changes.py --results_dir results/propagatio
 ```
 
 Prints the `prev_points` / `prev_points_changed` statistics per dataset, `k` and `b`. Files with
-the same dataset, `k` and `b` in one directory are pooled, so keep `opt` runs in their own
+the same dataset, `k` and `b` in one directory are pooled, so keep `--opt` runs in their own
 directory (as `run_experiments.sh` does).
+
+### Comparing runtimes
+
+```bash
+python plots/scripts/compare_runtimes.py                          # results/propagation_opt, k = 5 10 15 20
+python plots/scripts/compare_runtimes.py --datasets uber --k 5 10
+python plots/scripts/compare_runtimes.py --csv results/propagation_opt/uber/*.csv --per_timestep
+```
+
+Prints per dataset, `k` and `b` the median / mean / max runtime per timestep of `form`, `fid`,
+`opt_fid` and `opt_mc`, how many times slower each exact algorithm is than the heuristic for
+the same problem (median `opt_fid`/`fid` and `opt_mc`/`form`), and how many exact solves hit
+the time limit (their runtime equals the limit). Writes `plots/runtime/runtime_<dataset>.png`
+(median runtime over `b`, log scale, one panel per `k`) and, with `--per_timestep`, one figure
+per CSV. The timestep-1 `opt_kmedian` row is excluded.
 
 ### Plotting for the paper
 

@@ -154,8 +154,11 @@ def main():
     parser.add_argument("--plots_dir", type=str, default="plots/out",
                         help="Output directory for the generated plot")
     parser.add_argument("--opt", action="store_true",
-                        help="Also compute the exact optimum of the center-identity variant (needs a Gurobi build); "
-                             "its exact k-median of timestep 1 becomes the initial clustering for all algorithms")
+                        help="Also run the exact algorithms opt_fid / opt_mc (needs a Gurobi build); the exact "
+                             "k-median of timestep 1 becomes the initial clustering for all algorithms")
+    parser.add_argument("--opt_algos", default="fid,mc",
+                        help="Which exact algorithms to run with --opt: 'fid' (optimum of FID's problem), "
+                             "'mc' (optimum of FORM's problem) or 'fid,mc' (default)")
     parser.add_argument("--opt_time_limit", type=float, default=3600,
                         help="Gurobi time limit in seconds per opt solve")
     parser.add_argument("--opt_mip_gap", type=float, default=0.0,
@@ -163,8 +166,8 @@ def main():
     parser.add_argument("--opt_threads", type=int, default=0,
                         help="Gurobi threads per opt solve (0 = all cores)")
     parser.add_argument("--opt_formulation", choices=["benders", "classic"], default="benders",
-                        help="MIP formulation for opt: 'benders' (3n variables, cuts on demand; default) "
-                             "or 'classic' (n^2 + n variables; for cross-checking)")
+                        help="MIP formulation for opt_fid / opt_kmedian: 'benders' (cuts on demand; default) "
+                             "or 'classic' (n^2 + n variables; for cross-checking). opt_mc always uses benders")
     parser.add_argument("--no_plot", action="store_true",
                         help="Skip generating the plot after the experiment finishes")
     args = parser.parse_args()
@@ -195,7 +198,7 @@ def main():
            "--b_fraction", str(args.b_fraction), "--heuristic", args.heuristic,
            "--opt", str(args.opt).lower(), "--opt_time_limit", str(args.opt_time_limit),
            "--opt_mip_gap", str(args.opt_mip_gap), "--opt_threads", str(args.opt_threads),
-           "--opt_formulation", args.opt_formulation]
+           "--opt_formulation", args.opt_formulation, "--opt_algos", args.opt_algos]
     # stdout is not captured so the C++ progress output reaches the terminal live.
     result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:

@@ -1,19 +1,19 @@
 #!/bin/bash
 
 DATASETS=(
+  "wildfire"
+  "uber"
   "online_retail"
   "household_power"
-  #"wildfire"
-  #"uber"
   "twitter"
 )
 
-K_VALUES=(5 10 15 20)
+K_VALUES=(5 10)
 B_FRACTIONS=(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 HEURISTICS=("kmedianppwpost")
 TIMESTEPS_VALUES=(30)
 
-# Exact optimum of the center-identity variant ("opt", needs Gurobi; see README).
+# Exact algorithms opt_fid / opt_mc (need Gurobi; see README).
 # Off by default. Turn on manually, for example:
 #   RUN_OPT=1 OPT_TIME_LIMIT=1800 ./run_experiments.sh
 # With RUN_OPT=1 the opt k-median of timestep 1 becomes the initial clustering of
@@ -21,11 +21,12 @@ TIMESTEPS_VALUES=(30)
 RUN_OPT="${RUN_OPT:-0}"
 OPT_TIME_LIMIT="${OPT_TIME_LIMIT:-3600}"   # seconds per Gurobi solve
 OPT_MIP_GAP="${OPT_MIP_GAP:-0}"            # 0 = solve to proven optimality
-OPT_FORMULATION="${OPT_FORMULATION:-benders}"  # benders (fast, default) or classic (n^2 variables)
+OPT_FORMULATION="${OPT_FORMULATION:-benders}"  # benders (fast, default) or classic (n^2 variables, opt_fid only)
+OPT_ALGOS="${OPT_ALGOS:-fid,mc}"           # opt_fid (FID's problem), opt_mc (FORM's problem) or both
 
 if [[ "$RUN_OPT" == "1" ]]; then
-  RESULTS_DIR="${RESULTS_DIR:-results/propagation_opt}"
-  PLOTS_DIR="${PLOTS_DIR:-plots/propagation_opt}"
+  RESULTS_DIR="${RESULTS_DIR:-results/propagation_opts}"
+  PLOTS_DIR="${PLOTS_DIR:-plots/propagation_opts}"
   OPT_SUFFIX="_opt"
 else
   RESULTS_DIR="${RESULTS_DIR:-results/propagation}"
@@ -68,8 +69,8 @@ if [[ "$RUN_OPT" == "1" ]]; then
     (( OPT_THREADS < 1 )) && OPT_THREADS=1
   fi
   OPT_ARGS=(--opt --opt_time_limit "$OPT_TIME_LIMIT" --opt_mip_gap "$OPT_MIP_GAP" --opt_threads "$OPT_THREADS"
-            --opt_formulation "$OPT_FORMULATION")
-  echo "opt is ENABLED ($OPT_FORMULATION formulation, time limit ${OPT_TIME_LIMIT}s, MIP gap $OPT_MIP_GAP, $OPT_THREADS Gurobi threads per job)."
+            --opt_formulation "$OPT_FORMULATION" --opt_algos "$OPT_ALGOS")
+  echo "opt is ENABLED (algorithms: $OPT_ALGOS, time limit ${OPT_TIME_LIMIT}s, MIP gap $OPT_MIP_GAP, $OPT_THREADS Gurobi threads per job)."
   echo "Results: $RESULTS_DIR, plots: $PLOTS_DIR"
 else
   echo "opt is DISABLED (set RUN_OPT=1 to enable)."
