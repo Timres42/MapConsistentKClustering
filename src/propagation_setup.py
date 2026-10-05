@@ -98,15 +98,23 @@ def serialize_sequence(drift_sequence: list, path: str) -> None:
             f.write(pts.tobytes())
 
 
-def ensure_binary() -> str:
+def built_with_gurobi() -> bool:
+    """True if the last `make` enabled Gurobi (recorded by the Makefile in build/.build_config)."""
+    config = os.path.join(os.path.dirname(CPP_BINARY), ".build_config")
+    return os.path.exists(config) and "-DUSE_GUROBI" in open(config).read()
+
+
+def ensure_binary(need_opt: bool = False) -> str:
     """Build the C++ core if needed and return the path to the executable."""
     src_files = [
+        os.path.join(REPO_ROOT, "Makefile"),
         os.path.join(REPO_ROOT, "src", "propagation.cpp"),
         os.path.join(REPO_ROOT, "src", "include", "core.hpp"),
         os.path.join(REPO_ROOT, "src", "include", "heuristics.hpp"),
         os.path.join(REPO_ROOT, "src", "include", "knapsack.hpp"),
         os.path.join(REPO_ROOT, "src", "include", "form.hpp"),
         os.path.join(REPO_ROOT, "src", "include", "fid.hpp"),
+        os.path.join(REPO_ROOT, "src", "include", "opt.hpp"),
     ]
     needs_build = not os.path.exists(CPP_BINARY)
     if not needs_build:
@@ -115,9 +123,14 @@ def ensure_binary() -> str:
             if os.path.exists(sp) and os.path.getmtime(sp) > bin_mtime:
                 needs_build = True
                 break
+    if need_opt and not built_with_gurobi():
+        needs_build = True  # e.g. built before GUROBI_HOME was set
     if needs_build:
         print("Building C++ core...")
         subprocess.run(["make", "-C", CPP_DIR], check=True)
+    if need_opt and not built_with_gurobi():
+        raise SystemExit("--opt needs a Gurobi build: set GUROBI_HOME to your Gurobi installation "
+                         "(see README, 'Exact optimum (opt)') and rerun.")
     return CPP_BINARY
 
 
@@ -140,6 +153,15 @@ def main():
                         help="Output directory")
     parser.add_argument("--plots_dir", type=str, default="plots/out",
                         help="Output directory for the generated plot")
+    parser.add_argument("--opt", action="store_true",
+                        help="Also compute the exact optimum of the center-identity variant (needs a Gurobi build); "
+                             "its exact k-median of timestep 1 becomes the initial clustering for all algorithms")
+    parser.add_argument("--opt_time_limit", type=float, default=3600,
+                        help="Gurobi time limit in seconds per opt solve")
+    parser.add_argument("--opt_mip_gap", type=float, default=0.0,
+                        help="Relative MIP gap at which Gurobi stops (0 = proven optimum)")
+    parser.add_argument("--opt_threads", type=int, default=0,
+                        help="Gurobi threads per opt solve (0 = all cores)")
     parser.add_argument("--no_plot", action="store_true",
                         help="Skip generating the plot after the experiment finishes")
     args = parser.parse_args()
@@ -158,16 +180,18 @@ def main():
     output_file = os.path.join(
         args.results_dir,
         f"[{args.timesteps}]_{args.dataset}_k{args.k}_kernels{args.num_kernels}"
-        f"_base-{args.heuristic}_b{args.b_fraction}.csv")
+        f"_base-{args.heuristic}_b{args.b_fraction}{'_opt' if args.opt else ''}.csv")
 
     # Serialize the sequence and run the C++ core.
-    binary = ensure_binary()
+    binary = ensure_binary(need_opt=args.opt)
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
         data_path = tf.name
     serialize_sequence(drift_sequence, data_path)
     cmd = [binary, "--data", data_path, "--out", output_file,
            "--dataset", args.dataset, "--k", str(args.k),
-           "--b_fraction", str(args.b_fraction), "--heuristic", args.heuristic]
+           "--b_fraction", str(args.b_fraction), "--heuristic", args.heuristic,
+           "--opt", str(args.opt).lower(), "--opt_time_limit", str(args.opt_time_limit),
+           "--opt_mip_gap", str(args.opt_mip_gap), "--opt_threads", str(args.opt_threads)]
     # stdout is not captured so the C++ progress output reaches the terminal live.
     result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:

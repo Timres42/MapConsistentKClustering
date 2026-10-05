@@ -1,11 +1,11 @@
 #!/bin/bash
 
 DATASETS=(
-  "twitter"
-  "online_retail"
-  "household_power"
   "wildfire"
   "uber"
+  "online_retail"
+  "household_power"
+  "twitter"
 )
 
 K_VALUES=(5 10 15 20)
@@ -13,26 +13,42 @@ B_FRACTIONS=(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)
 HEURISTICS=("kmedianppwpost")
 TIMESTEPS_VALUES=(30)
 
-RESULTS_DIR="results/propagation"
-PLOTS_DIR="plots/propagation"
+# Exact optimum of the center-identity variant ("opt", needs Gurobi; see README).
+# Off by default. Turn on manually, for example:
+#   RUN_OPT=1 OPT_TIME_LIMIT=1800 ./run_experiments.sh
+# With RUN_OPT=1 the opt k-median of timestep 1 becomes the initial clustering of
+# all algorithms, so these runs go to separate results/plots directories.
+RUN_OPT="${RUN_OPT:-0}"
+OPT_TIME_LIMIT="${OPT_TIME_LIMIT:-3600}"   # seconds per Gurobi solve
+OPT_MIP_GAP="${OPT_MIP_GAP:-0}"            # 0 = solve to proven optimality
+
+if [[ "$RUN_OPT" == "1" ]]; then
+  RESULTS_DIR="${RESULTS_DIR:-results/propagation_opt}"
+  PLOTS_DIR="${PLOTS_DIR:-plots/propagation_opt}"
+  OPT_SUFFIX="_opt"
+else
+  RESULTS_DIR="${RESULTS_DIR:-results/propagation}"
+  PLOTS_DIR="${PLOTS_DIR:-plots/propagation}"
+  OPT_SUFFIX=""
+fi
 
 mkdir -p "$RESULTS_DIR"
 mkdir -p "$PLOTS_DIR"
 
 # Limit the number of experiments running at the same time.
 # Override manually, for example:
-#   MAX_JOBS=4 ./run_experiments_parallel.sh
+#   MAX_JOBS=4 ./run_experiments.sh
 #
 # Default: use half the available CPU cores, capped at 4.
-if [[ -z "${MAX_JOBS:-}" ]]; then
-  if command -v sysctl >/dev/null 2>&1; then
-    CPU_COUNT=$(sysctl -n hw.ncpu 2>/dev/null || echo 2)
-  elif command -v nproc >/dev/null 2>&1; then
-    CPU_COUNT=$(nproc)
-  else
-    CPU_COUNT=2
-  fi
+if command -v sysctl >/dev/null 2>&1 && sysctl -n hw.ncpu >/dev/null 2>&1; then
+  CPU_COUNT=$(sysctl -n hw.ncpu)
+elif command -v nproc >/dev/null 2>&1; then
+  CPU_COUNT=$(nproc)
+else
+  CPU_COUNT=2
+fi
 
+if [[ -z "${MAX_JOBS:-}" ]]; then
   MAX_JOBS=$((CPU_COUNT / 2))
   if (( MAX_JOBS < 1 )); then
     MAX_JOBS=1
@@ -42,6 +58,20 @@ if [[ -z "${MAX_JOBS:-}" ]]; then
 fi
 
 echo "Running at most $MAX_JOBS experiments in parallel."
+
+OPT_ARGS=()
+if [[ "$RUN_OPT" == "1" ]]; then
+  # Share the cores between the parallel jobs (Gurobi would otherwise use all of them per job).
+  if [[ -z "${OPT_THREADS:-}" ]]; then
+    OPT_THREADS=$((CPU_COUNT / MAX_JOBS))
+    (( OPT_THREADS < 1 )) && OPT_THREADS=1
+  fi
+  OPT_ARGS=(--opt --opt_time_limit "$OPT_TIME_LIMIT" --opt_mip_gap "$OPT_MIP_GAP" --opt_threads "$OPT_THREADS")
+  echo "opt is ENABLED (time limit ${OPT_TIME_LIMIT}s, MIP gap $OPT_MIP_GAP, $OPT_THREADS Gurobi threads per job)."
+  echo "Results: $RESULTS_DIR, plots: $PLOTS_DIR"
+else
+  echo "opt is DISABLED (set RUN_OPT=1 to enable)."
+fi
 
 # Whether to also generate plots after each dataset/timestep/k/heuristic batch.
 # Off by default. Turn on manually, for example:
@@ -58,7 +88,12 @@ fi
 
 # Build once before starting parallel jobs so multiple Python processes do not
 # try to invoke make at the same time.
-make
+make || exit 1
+
+if [[ "$RUN_OPT" == "1" ]] && ! grep -q -- "-DUSE_GUROBI" build/.build_config 2>/dev/null; then
+  echo "RUN_OPT=1 needs a Gurobi build: set GUROBI_HOME to your Gurobi installation (see README)."
+  exit 1
+fi
 
 echo
 echo "Checking datasets..."
@@ -111,6 +146,7 @@ for timesteps in "${TIMESTEPS_VALUES[@]}"; do
             --heuristic "$heur" \
             --num_kernels "$MAX_JOBS" \
             --no_plot \
+            "${OPT_ARGS[@]}" \
             --results_dir "$RESULTS_DIR/$ds" &
 
           pids+=("$!")
@@ -137,7 +173,7 @@ for timesteps in "${TIMESTEPS_VALUES[@]}"; do
           csv_files=()
 
           for b in "${B_FRACTIONS[@]}"; do
-            csv="$RESULTS_DIR/$ds/[${timesteps}]_${ds}_k${k}_kernels${MAX_JOBS}_base-${heur}_b${b}.csv"
+            csv="$RESULTS_DIR/$ds/[${timesteps}]_${ds}_k${k}_kernels${MAX_JOBS}_base-${heur}_b${b}${OPT_SUFFIX}.csv"
 
             if [[ -f "$csv" ]]; then
               csv_files+=("$csv")
@@ -190,7 +226,7 @@ PY
 
           # Plot sequentially to avoid adding unnecessary CPU and memory load.
           for b in "${B_FRACTIONS[@]}"; do
-            csv="$RESULTS_DIR/$ds/[${timesteps}]_${ds}_k${k}_kernels${MAX_JOBS}_base-${heur}_b${b}.csv"
+            csv="$RESULTS_DIR/$ds/[${timesteps}]_${ds}_k${k}_kernels${MAX_JOBS}_base-${heur}_b${b}${OPT_SUFFIX}.csv"
 
             if [[ ! -f "$csv" ]]; then
               echo "Skipping missing file: $csv"

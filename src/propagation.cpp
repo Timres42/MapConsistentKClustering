@@ -15,6 +15,7 @@
 #include "heuristics.hpp"
 #include "form.hpp"
 #include "fid.hpp"
+#include "opt.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -69,10 +70,12 @@ static std::string fmt(double v) {
 
 struct CsvWriter {
     FILE* f;
+    size_t ncols = 0;  // set by the header row; shorter rows are padded with "nan"
     void row(const std::vector<std::string>& cells) {
-        for (size_t i = 0; i < cells.size(); ++i) {
+        if (ncols == 0) ncols = cells.size();
+        for (size_t i = 0; i < std::max(cells.size(), ncols); ++i) {
             if (i) std::fputc(',', f);
-            std::fputs(cells[i].c_str(), f);
+            std::fputs(i < cells.size() ? cells[i].c_str() : "nan", f);
         }
         std::fputc('\n', f);
         std::fflush(f);
@@ -190,6 +193,18 @@ int main(int argc, char** argv) {
     //uint64_t seed   = (uint64_t)std::stoll(get_arg(argc, argv, "--seed", "42"));
     bool reproducible = parse_bool(get_arg(argc, argv, "--reproducible", "true"));
     HeuristicKind kind = parse_heuristic(heur_name);
+    // OPT: exact optimum of the center-identity variant (needs Gurobi, see opt.hpp).
+    bool use_opt          = parse_bool(get_arg(argc, argv, "--opt", "false"));
+    double opt_time_limit = std::stod(get_arg(argc, argv, "--opt_time_limit", "3600"));
+    double opt_mip_gap    = std::stod(get_arg(argc, argv, "--opt_mip_gap", "0"));
+    int    opt_threads    = std::stoi(get_arg(argc, argv, "--opt_threads", "0"));  // 0 = all cores
+#ifndef USE_GUROBI
+    (void)opt_time_limit; (void)opt_mip_gap; (void)opt_threads;
+    if (use_opt) {
+        std::fprintf(stderr, "--opt requires a build with Gurobi (-DUSE_GUROBI), see opt.hpp\n");
+        return 1;
+    }
+#endif
 
     std::vector<Points> seq = load_sequence(data_path);
     int T = (int)seq.size();
@@ -201,7 +216,7 @@ int main(int argc, char** argv) {
     csv.row({"dataset", "timestep", "num_points", "k", "method", "b_fraction",
              "baseline/sigma used", "b_abs_available", "historical_cost", "result_cost",
              "b_abs_used", "execution_time", "baseline_cost", "relative_cost_ratio",
-             "prev_points", "prev_points_changed"});
+             "prev_points", "prev_points_changed", "opt_optimal", "opt_mip_gap"});
 
     // --- Timestep 1: fresh baseline only ---
     const Points& P0 = seq[0];
@@ -217,20 +232,40 @@ int main(int argc, char** argv) {
              b_str, heur_name, std::to_string(b_abs0), "nan", fmt(t0_baseline_cost),
              "nan", fmt(baseline_elapsed), fmt(t0_baseline_cost), "1.0", "nan", "nan"});
 
-    // Per-algorithm propagated center coordinates (order matches ALGORITHMS: form, fid).
-    const std::vector<std::string> ALGOS = {"form", "fid"};
+    // Initial clustering propagated by every algorithm: the k-median++ baseline, or
+    // with --opt the exact k-median optimum of the first timestep.
+    Clustering init_clust = baseline0;
+#ifdef USE_GUROBI
+    if (use_opt) {
+        std::printf("  Computing exact k-median (opt) for timestep 1...\n");
+        OptInfo info;
+        MappedClustering opt0 = opt_lcc_median_center_identity(
+            P0, k, nullptr, n0, {baseline0.centers}, opt_time_limit, opt_mip_gap, opt_threads, info);
+        init_clust = opt0.clustering;
+        double opt0_cost = init_clust.cost();
+        csv.row({dataset, "1", std::to_string(n0), std::to_string(k), "opt",
+                 b_str, heur_name, std::to_string(b_abs0), "nan", fmt(opt0_cost),
+                 "nan", fmt(info.runtime), fmt(t0_baseline_cost),
+                 fmt(t0_baseline_cost > 0 ? opt0_cost / t0_baseline_cost : 1.0),
+                 "nan", "nan", info.optimal ? "1" : "0", fmt(info.mip_gap)});
+    }
+#endif
+
+    // Per-algorithm propagated center coordinates (order matches ALGOS).
+    std::vector<std::string> ALGOS = {"form", "fid"};
+    if (use_opt) ALGOS.push_back("opt");
     std::vector<std::vector<double>> algo_coords(ALGOS.size());  // each k*d, laid out row-major
     for (size_t a = 0; a < ALGOS.size(); ++a) {
         std::vector<double> coords((size_t)k * P0.d);
         for (int c = 0; c < k; ++c)
-            std::memcpy(&coords[(size_t)c * P0.d], P0.row(baseline0.centers[c]), sizeof(double) * P0.d);
+            std::memcpy(&coords[(size_t)c * P0.d], P0.row(init_clust.centers[c]), sizeof(double) * P0.d);
         algo_coords[a] = std::move(coords);
     }
 
     // FORM's labels on the previous instance X_{i-1}, grouped by coordinates. Labels
     // index FORM's centers, which are propagated in the same order, so label c in
     // X_{i-1} is label c of the historical clustering in X_i.
-    LabelCounts form_prev_labels = count_labels(P0, baseline0.assignment, k);
+    LabelCounts form_prev_labels = count_labels(P0, init_clust.assignment, k);
 
     // --- Propagate across timesteps ---
     for (int t_idx = 1; t_idx < T; ++t_idx) {
@@ -269,6 +304,9 @@ int main(int argc, char** argv) {
                  "baseline_heuristic", b_str, heur_name, std::to_string(b_abs), "nan",
                  fmt(best_baseline_cost), "nan", fmt(baseline_elapsed), fmt(best_baseline_cost), "1.0", "nan", "nan"});
 
+        // Center sets of this timestep's solutions, used as MIP start candidates for opt.
+        std::vector<std::vector<int>> opt_starts = {baseline.centers};
+
         for (size_t a = 0; a < ALGOS.size(); ++a) {
             const std::string& algo = ALGOS[a];
             std::printf("  Evaluating %s...\n", algo.c_str());
@@ -296,14 +334,33 @@ int main(int argc, char** argv) {
                      fmt(hist_cost), "0", fmt(hist_elapsed), fmt(best_baseline_cost), fmt(hist_ratio), "nan", "nan"});
 
             auto start = std::chrono::steady_clock::now();
-            MappedClustering result = (algo == "form")
-                ? poly_lcc_median_fct(aug, k, hist_clust, b_abs, baseline)
-                : poly_lcc_median_f_id(aug, k, hist_clust, b_abs, baseline);
+            MappedClustering result;
+            std::string opt_optimal = "nan", opt_gap = "nan";
+            int opt_budget_used = -1;
+            if (algo == "form") {
+                result = poly_lcc_median_fct(aug, k, hist_clust, b_abs, baseline);
+            } else if (algo == "fid") {
+                result = poly_lcc_median_f_id(aug, k, hist_clust, b_abs, baseline);
+            } else {
+#ifdef USE_GUROBI
+                OptInfo info;
+                opt_starts.push_back(hist_clust.centers);
+                result = opt_lcc_median_center_identity(aug, k, &hist_clust, b_abs, opt_starts,
+                                                        opt_time_limit, opt_mip_gap, opt_threads, info);
+                opt_optimal = info.optimal ? "1" : "0";
+                opt_gap = fmt(info.mip_gap);
+                opt_budget_used = info.budget_used;
+                std::printf("    opt: status %d, gap %.3g, %.1fs\n", info.status, info.mip_gap, info.runtime);
+#endif
+            }
             auto end = std::chrono::steady_clock::now();
             double elapsed = std::chrono::duration<double>(end - start).count();
+            opt_starts.push_back(result.clustering.centers);
 
             double result_cost = result.clustering.cost();
-            int c_dist = cluster_distance(hist_clust, result.clustering, result.mapping);
+            // For opt, b_abs_used is the variant's budget: points whose center point changed.
+            int c_dist = (algo == "opt") ? opt_budget_used
+                                         : cluster_distance(hist_clust, result.clustering, result.mapping);
             double relative_ratio = best_baseline_cost > 0 ? result_cost / best_baseline_cost : 1.0;
 
             // Remember FORM's final labels on X_i for the next instance creation.
@@ -314,7 +371,7 @@ int main(int argc, char** argv) {
                      algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
                      fmt(result_cost), std::to_string(c_dist), fmt(elapsed),
                      fmt(best_baseline_cost), fmt(relative_ratio),
-                     form_prev_points, form_prev_changed});
+                     form_prev_points, form_prev_changed, opt_optimal, opt_gap});
 
             // Propagate this algorithm's resulting centers to the next timestep.
             std::vector<double> coords((size_t)k * d);
