@@ -11,6 +11,7 @@ plots/*
 data/*
 !data/loader/
 build/
+*.log
 
 # Ignore IDE and OS files
 .DS_Store
