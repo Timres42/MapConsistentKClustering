@@ -12,7 +12,8 @@ Terminal output, per dataset and k, one row per b:
 
 Figures (<output_dir>/runtime_<dataset>.png): one panel per k, median runtime over b on a
 log scale with the 25-75 % range shaded. Hollow markers: at least one exact solve timed out.
-With --per_timestep, additionally one figure per CSV with the runtime of every timestep.
+With --per_timestep, additionally one figure per CSV with the runtime of every timestep. The
+runtime tables are also written to <output_dir>/runtimes.
 
 Usage:
     python plots/scripts/compare_runtimes.py                                  # results/propagation_opt
@@ -22,7 +23,9 @@ Usage:
 
 import argparse
 import glob
+import io
 import os
+from contextlib import redirect_stdout
 
 import numpy as np
 import pandas as pd
@@ -198,8 +201,11 @@ def plot_per_timestep(data: pd.DataFrame, out_dir: str):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--results_dir", default=os.path.join(REPO_ROOT, "results", "propagation_opt"),
-                        help="Directory with one subdirectory per dataset")
+    parser.add_argument(
+        "--results_dir",
+        default=os.path.join(REPO_ROOT, "results", "propagation_opt"),
+        help="Directory with one subdirectory per dataset (falls back to propagation_opts)",
+    )
     parser.add_argument("--datasets", nargs="*", default=None, help="Datasets (default: every subdirectory)")
     parser.add_argument("--k", nargs="*", type=int, default=[5, 10, 15, 20], help="k values to report")
     parser.add_argument("--csv", nargs="*", default=None, help="Explicit CSV files instead of --results_dir")
@@ -208,12 +214,15 @@ def main():
     parser.add_argument("--no_plot", action="store_true", help="Only print the tables")
     args = parser.parse_args()
 
-    if args.csv:
-        paths = args.csv
-    else:
+    if not args.csv:
+        default_results_dir = os.path.join(REPO_ROOT, "results", "propagation_opt")
+        if not os.path.isdir(args.results_dir) and os.path.isdir(default_results_dir):
+            args.results_dir = default_results_dir
         datasets = args.datasets or sorted(d for d in os.listdir(args.results_dir)
                                            if os.path.isdir(os.path.join(args.results_dir, d)))
         paths = sorted(p for d in datasets for p in glob.glob(os.path.join(args.results_dir, d, "*.csv")))
+    else:
+        paths = args.csv
     data = load(paths)
     if data.empty:
         print("No results found.")
@@ -227,10 +236,19 @@ def main():
     for (ds, k, b), cnt in multi[multi > 1].items():
         print(f"  [note] {ds} k={k} b={b:g}: timesteps pooled from {cnt} files")
 
-    print_tables(data, datasets, k_values)
+    report_buffer = io.StringIO()
+    with redirect_stdout(report_buffer):
+        print_tables(data, datasets, k_values)
+    report = report_buffer.getvalue()
+    print(report, end="")
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    output_path = os.path.join(args.output_dir, "runtimes")
+    with open(output_path, "w", encoding="utf-8") as handle:
+        handle.write(report)
+    print(f"Runtime report saved to: {output_path}")
 
     if not args.no_plot:
-        os.makedirs(args.output_dir, exist_ok=True)
         for dataset in datasets:
             plot_overview(data, dataset, k_values, args.output_dir)
         if args.per_timestep:
