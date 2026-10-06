@@ -44,6 +44,8 @@ earlier Python-only implementation.
 - `run_experiments.sh`: Batch-runs `src.propagation_setup` across datasets, `k` values, and
   budget fractions, optionally in parallel, optionally with `opt_mc` / `opt_fid` (`RUN_OPT=1`) and optionally
   plotting afterwards
+- `src/wildfire_node_scaling.py`: Runs the wildfire point-fraction scaling experiment for
+  fractions 0.1-1.0, `k` 5 and 10, and `b` 0.0-1.0
 - `tests/test_opt.cpp`: Compares `opt_kmedian`, `opt_fid` (both formulations) and `opt_mc` with
   brute-force enumeration on small random instances, and checks `opt_mc <= opt_fid`,
   `opt_mc <= FORM` and `opt_fid <= FID` for the same historical clustering
@@ -88,6 +90,8 @@ earlier Python-only implementation.
   `opt_kmedian` row is left out; older results with method `opt` are read as `opt_fid`)
 - `compare_runtimes.py`: Compares the runtime of `form`, `fid`, `opt_fid` and `opt_mc` per dataset, `k` and
   `b` (terminal table plus log-scale figures, see [Comparing runtimes](#comparing-runtimes))
+- `plot_wildfire_node_scaling.py`: Creates a separate total-FORM-runtime plot for each
+  `(k, b)` combination from the wildfire point-fraction experiment
 - `plots_propagation_ratio_bviolin_multiple.py`, `plots_propagation_ratio_multiple.py`: Used by
   `run_plots_for_paper.sh` to build multi-panel figures across several runs at once
 - `plots_propagation_ratio.py`: Not currently invoked by any script - an older, single-panel
@@ -118,6 +122,25 @@ but the binary was built without Gurobi), but you can also build it directly:
 ```bash
 make
 ```
+
+### Wildfire runtime scaling
+
+Run the complete 220-run grid (FORM, FID, and baseline are all recorded by the propagation
+driver):
+
+```bash
+python -m src.wildfire_node_scaling
+python plots/scripts/plot_wildfire_node_scaling.py
+```
+
+Each result CSV is stored below
+`results/wildfire_node_scaling/fraction_<fraction>/`; the plots are written to
+`plots/wildfire_node_scaling/`. Wildfire points are sampled uniformly without replacement
+within each daily slice. The fixed seed makes samples reproducible and nested across
+fractions, while retaining at least one point in each nonempty day. FORM runtime totals
+sum the per-timestep `execution_time` values in the CSV. Each runtime plot also overlays
+a per-`(k, b)` through-origin least-squares fit of `c * sum_t(n_t * log(n_t))`, using each
+FORM row's `num_points` value.
 
 ### Optional: Gurobi (only for `opt_mc` / `opt_fid`)
 
@@ -330,9 +353,10 @@ python plots/scripts/compare_runtimes.py --csv results/propagation_opt/uber/*.cs
 Prints per dataset, `k` and `b` the median / mean / max runtime per timestep of `form`, `fid`,
 `opt_fid` and `opt_mc`, how many times slower each exact algorithm is than the heuristic for
 the same problem (median `opt_fid`/`fid` and `opt_mc`/`form`), and how many exact solves hit
-the time limit (their runtime equals the limit). Writes `plots/runtime/runtime_<dataset>.png`
-(median runtime over `b`, log scale, one panel per `k`) and, with `--per_timestep`, one figure
-per CSV. The timestep-1 `opt_kmedian` row is excluded.
+the time limit (their runtime equals the limit). Writes the runtime table to
+`plots/runtime/runtimes`, as well as `plots/runtime/runtime_<dataset>.png` (median runtime
+over `b`, log scale, one panel per `k`) and, with `--per_timestep`, one figure per CSV. The
+timestep-1 `opt_kmedian` row is excluded.
 
 ### Plotting for the paper
 

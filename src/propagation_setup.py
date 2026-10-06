@@ -40,7 +40,9 @@ CPP_DIR = REPO_ROOT
 CPP_BINARY = os.path.join(REPO_ROOT, "build", "propagation")
 
 
-def load_drift_sequence(dataset_name: str, k: int, seed: int, timesteps: int) -> list:
+def load_drift_sequence(
+    dataset_name: str, k: int, seed: int, timesteps: int, point_fraction: float = 1.0
+) -> list:
     """Load a temporal drift sequence for the specified dataset."""
 
     if dataset_name == "uber":
@@ -51,7 +53,12 @@ def load_drift_sequence(dataset_name: str, k: int, seed: int, timesteps: int) ->
 
     elif dataset_name == "wildfire":
         print("Loading US Wildfire Dataset...")
-        dataset_adapter = USWildfireDataset(start_date="2006-06-01", end_date="2006-06-30", seed=seed)
+        dataset_adapter = USWildfireDataset(
+            start_date="2006-06-01",
+            end_date="2006-06-30",
+            seed=seed,
+            point_fraction=point_fraction,
+        )
         pipeline = TemporalDriftPipeline(k=k, seed=seed, timesteps=timesteps)
         drift_sequence = pipeline.execute(dataset_adapter)
 
@@ -134,6 +141,50 @@ def ensure_binary(need_opt: bool = False) -> str:
     return CPP_BINARY
 
 
+def run_cpp_experiment(
+    drift_sequence: list,
+    output_file: str,
+    dataset_name: str,
+    k: int,
+    b_fraction: float,
+    heuristic: str,
+    opt: bool = False,
+    opt_time_limit: float = 3600,
+    opt_mip_gap: float = 0.0,
+    opt_threads: int = 0,
+    opt_formulation: str = "benders",
+    opt_algos: str = "fid,mc",
+    quiet: bool = False,
+) -> None:
+    """Serialize a drift sequence and run the C++ propagation core."""
+    binary = ensure_binary(need_opt=opt)
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
+        data_path = tf.name
+    serialize_sequence(drift_sequence, data_path)
+    cmd = [binary, "--data", data_path, "--out", output_file,
+           "--dataset", dataset_name, "--k", str(k),
+           "--b_fraction", str(b_fraction), "--heuristic", heuristic,
+           "--opt", str(opt).lower(), "--opt_time_limit", str(opt_time_limit),
+           "--opt_mip_gap", str(opt_mip_gap), "--opt_threads", str(opt_threads),
+           "--opt_formulation", opt_formulation, "--opt_algos", opt_algos]
+    # Keep normal setup progress visible, but allow batch drivers to suppress it.
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL if quiet else None,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        print("STDERR:", result.stderr)
+        print(f"Binary failed, inspect data at: {data_path}")
+        raise subprocess.CalledProcessError(
+            result.returncode, cmd, output=result.stdout, stderr=result.stderr
+        )
+
+    # Keep the serialized input on failure for debugging.
+    os.remove(data_path)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Evaluate label-consistent clustering with center propagation across temporal datasets."
@@ -147,6 +198,8 @@ def main():
                         help="Budget fraction (b / n) - recalculated per timestep")
     parser.add_argument("--timesteps", type=int, default=10,
                         help="Number of sequential time steps to evaluate")
+    parser.add_argument("--point_fraction", type=float, default=1.0,
+                        help="For wildfire, retain this fraction of points per daily slice (0 < fraction <= 1)")
     parser.add_argument("--heuristic", type=str, default="kmedianppwpost",
                         choices=HEURISTIC_CHOICES, help="Heuristic strategy")
     parser.add_argument("--results_dir", type=str, default="results/propagation",
@@ -179,7 +232,9 @@ def main():
     seed = 42
 
     # Load drift sequence (Python loaders).
-    drift_sequence = load_drift_sequence(args.dataset, args.k, seed, args.timesteps)
+    drift_sequence = load_drift_sequence(
+        args.dataset, args.k, seed, args.timesteps, args.point_fraction
+    )
     print(f"Loaded {len(drift_sequence)} timesteps with k={args.k}")
 
     # Output CSV path records cluster count separately from kernel count.
@@ -188,26 +243,20 @@ def main():
         f"[{args.timesteps}]_{args.dataset}_k{args.k}_kernels{args.num_kernels}"
         f"_base-{args.heuristic}_b{args.b_fraction}{'_opt' if args.opt else ''}.csv")
 
-    # Serialize the sequence and run the C++ core.
-    binary = ensure_binary(need_opt=args.opt)
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
-        data_path = tf.name
-    serialize_sequence(drift_sequence, data_path)
-    cmd = [binary, "--data", data_path, "--out", output_file,
-           "--dataset", args.dataset, "--k", str(args.k),
-           "--b_fraction", str(args.b_fraction), "--heuristic", args.heuristic,
-           "--opt", str(args.opt).lower(), "--opt_time_limit", str(args.opt_time_limit),
-           "--opt_mip_gap", str(args.opt_mip_gap), "--opt_threads", str(args.opt_threads),
-           "--opt_formulation", args.opt_formulation, "--opt_algos", args.opt_algos]
-    # stdout is not captured so the C++ progress output reaches the terminal live.
-    result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        print("STDERR:", result.stderr)
-        print(f"Binary failed, inspect data at: {data_path}")
-        raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=result.stderr)
-
-    # Only clean up on success; keep the temp file around on failure for debugging.
-    os.remove(data_path)
+    run_cpp_experiment(
+        drift_sequence=drift_sequence,
+        output_file=output_file,
+        dataset_name=args.dataset,
+        k=args.k,
+        b_fraction=args.b_fraction,
+        heuristic=args.heuristic,
+        opt=args.opt,
+        opt_time_limit=args.opt_time_limit,
+        opt_mip_gap=args.opt_mip_gap,
+        opt_threads=args.opt_threads,
+        opt_formulation=args.opt_formulation,
+        opt_algos=args.opt_algos,
+    )
 
     print(f"\nExperiment complete. Results saved to: {output_file}")
 
