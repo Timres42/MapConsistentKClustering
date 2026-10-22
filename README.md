@@ -46,6 +46,8 @@ earlier Python-only implementation.
   plotting afterwards
 - `src/wildfire_node_scaling.py`: Runs the wildfire point-fraction scaling experiment for
   fractions 0.1-1.0, `k` 5 and 10, and `b` 0.0-1.0
+- `src/seed_study.py`: Runs the seed study (FORM, FID and baseline with 30 independent
+  k-median++ seeds per configuration, see [Seed study](#seed-study-variability-of-k-median))
 - `tests/test_opt.cpp`: Compares `opt_kmedian`, `opt_fid` (both formulations) and `opt_mc` with
   brute-force enumeration on small random instances, and checks `opt_mc <= opt_fid`,
   `opt_mc <= FORM` and `opt_fid <= FID` for the same historical clustering
@@ -92,6 +94,8 @@ earlier Python-only implementation.
   `b` (terminal table plus log-scale figures, see [Comparing runtimes](#comparing-runtimes))
 - `plot_wildfire_node_scaling.py`: Creates a separate total-FORM-runtime plot for each
   `(k, b)` combination from the wildfire point-fraction experiment
+- `evaluate_seeds.py`: Evaluates the seed study (mean / sd / 95 % CI across seeds, paired
+  FORM vs FID comparison with Wilcoxon test, tables and figures)
 - `plots_propagation_ratio_bviolin_multiple.py`, `plots_propagation_ratio_multiple.py`: Used by
   `run_plots_for_paper.sh` to build multi-panel figures across several runs at once
 - `plots_propagation_ratio.py`: Not currently invoked by any script - an older, single-panel
@@ -141,6 +145,42 @@ fractions, while retaining at least one point in each nonempty day. FORM runtime
 sum the per-timestep `execution_time` values in the CSV. Each runtime plot also overlays
 a per-`(k, b)` through-origin least-squares fit of `c * sum_t(n_t * log(n_t))`, using each
 FORM row's `num_points` value.
+
+### Seed study (variability of k-median++)
+
+Measures how much the randomness of the k-median++ initialization affects the baseline, FORM
+and FID (no exact algorithms):
+
+```bash
+python -m src.seed_study                     # wildfire, k 5/10, b 0.0-1.0, seeds 1-30 (660 runs)
+python plots/scripts/evaluate_seeds.py       # tables + figures in plots/seeds/
+```
+
+**Seed protocol.** The input data is fixed (data seed 42, identical for all runs); only the
+k-median++ randomness of the C++ core varies. Each run has a master seed `S` from a fixed,
+pre-specified list (default 1-30); restart `r` (of 5) of the baseline at timestep `t` uses
+`std::mt19937(std::seed_seq{S, t, r})`, so all `(S, t, r)` streams are distinct. All runs are
+reported. `results/seeds/<dataset>/protocol.json` records the configuration (seeds, grid,
+restarts, git commit, platform); every CSV has a `seed` column and `_s<S>` in its name. Runs
+whose CSV is complete are skipped, so an interrupted study can be resumed by rerunning it.
+Options: `--seeds 1-30`, `--k`, `--b`, `--timesteps`, `--jobs` (parallel runs, default half
+the cores), `--results_dir` (default `results/seeds`).
+
+**Statistics.** The unit of analysis is one run (seed): metrics are averaged over timesteps
+2..T per run. Across the seeds of each `(k, b)`, `evaluate_seeds.py` reports mean, sample
+standard deviation, 95 % confidence interval of the mean (t-distribution), median, IQR,
+min/max and coefficient of variation; a paired FORM vs FID comparison per seed (both see the
+same baseline within a run): mean difference with 95 % CI, number of seeds where FORM is
+better / equal / worse, Wilcoxon signed-rank test; and the coefficient of variation of the
+baseline cost across seeds per timestep. Outputs in `plots/seeds/`: `seeds_runs_*.csv`
+(per run), `seeds_summary_*.csv`, `seeds_paired_*.csv`, `seeds_timesteps_*.csv`, a LaTeX
+table `seeds_table_*.tex`, and figures `seeds_<dataset>_k<k>.png` (every seed as a dot, mean
+with 95 % CI, paired difference) and `seeds_<dataset>_k<k>_timesteps.png` (mean ± sd per
+timestep).
+
+Single runs accept the same option: `python -m src.propagation_setup ... --seed 7`. Without
+`--seed`, the legacy fixed seeds (`42 + 100 t + r`) are used, so earlier results stay
+reproducible.
 
 ### Optional: Gurobi (only for `opt_mc` / `opt_fid`)
 
@@ -204,10 +244,12 @@ Key arguments (see `propagation_setup.py`'s `argparse` block for the full list a
 - `--opt_threads`: Gurobi threads per solve (default `0` = all cores)
 - `--opt_formulation`: `benders` (default) or `classic` for `opt_fid` / `opt_kmedian`, see
   [Exact algorithms](#exact-algorithms-opt_mc-opt_fid)
+- `--seed`: master seed of the k-median++ randomness (see [Seed study](#seed-study-variability-of-k-median));
+  default: legacy fixed seeds. Adds `_s<seed>` to the file name
 
 This writes a CSV to
 `<results_dir>/[<timesteps>]_<dataset>_k<k>_kernels<num_kernels>_base-<heuristic>_b<b_fraction>.csv`
-(with `_opt` appended before `.csv` when `--opt` is given) and, unless `--no_plot` is given,
+(with `_opt` and/or `_s<seed>` appended before `.csv` when `--opt` / `--seed` is given) and, unless `--no_plot` is given,
 plots it with `plots_propagation_ratio_bviolin.py`.
 
 ### Batch experiments
@@ -322,6 +364,7 @@ baseline), and:
   instance creation (nearest-center assignment to the propagated centers)
 - `opt_optimal`, `opt_mip_gap` (only in `opt_kmedian`/`opt_fid`/`opt_mc` rows): `1` if Gurobi
   proved optimality (`0` if stopped by the time limit), and the final relative MIP gap
+- `seed`: the master seed given with `--seed` (in every row; `nan` for the legacy fixed seeds)
 
 All other cells of these columns are `nan`. `execution_time` is measured in seconds for each
 row's method, including the baseline heuristic, historical clustering and all algorithms.

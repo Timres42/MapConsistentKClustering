@@ -155,18 +155,29 @@ def run_cpp_experiment(
     opt_formulation: str = "benders",
     opt_algos: str = "fid,mc",
     quiet: bool = False,
+    seed: int = None,
+    data_path: str = None,
 ) -> None:
-    """Serialize a drift sequence and run the C++ propagation core."""
+    """Serialize a drift sequence and run the C++ propagation core.
+
+    seed: master seed of the k-median++ randomness in the C++ core (None = legacy
+    fixed seeds). data_path: an already serialized drift sequence to reuse (then
+    drift_sequence may be None and the file is kept).
+    """
     binary = ensure_binary(need_opt=opt)
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
-        data_path = tf.name
-    serialize_sequence(drift_sequence, data_path)
+    own_file = data_path is None
+    if own_file:
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
+            data_path = tf.name
+        serialize_sequence(drift_sequence, data_path)
     cmd = [binary, "--data", data_path, "--out", output_file,
            "--dataset", dataset_name, "--k", str(k),
            "--b_fraction", str(b_fraction), "--heuristic", heuristic,
            "--opt", str(opt).lower(), "--opt_time_limit", str(opt_time_limit),
            "--opt_mip_gap", str(opt_mip_gap), "--opt_threads", str(opt_threads),
            "--opt_formulation", opt_formulation, "--opt_algos", opt_algos]
+    if seed is not None:
+        cmd += ["--seed", str(seed)]
     # Keep normal setup progress visible, but allow batch drivers to suppress it.
     result = subprocess.run(
         cmd,
@@ -182,7 +193,8 @@ def run_cpp_experiment(
         )
 
     # Keep the serialized input on failure for debugging.
-    os.remove(data_path)
+    if own_file:
+        os.remove(data_path)
 
 
 def main():
@@ -221,6 +233,10 @@ def main():
     parser.add_argument("--opt_formulation", choices=["benders", "classic"], default="benders",
                         help="MIP formulation for opt_fid / opt_kmedian: 'benders' (cuts on demand; default) "
                              "or 'classic' (n^2 + n variables; for cross-checking). opt_mc always uses benders")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Master seed of the k-median++ randomness in the C++ core (restart r at "
+                             "timestep t uses seed_seq(seed, t, r)); default: legacy fixed seeds. "
+                             "The data seed stays 42, so the input data is identical for every seed")
     parser.add_argument("--no_plot", action="store_true",
                         help="Skip generating the plot after the experiment finishes")
     args = parser.parse_args()
@@ -241,7 +257,8 @@ def main():
     output_file = os.path.join(
         args.results_dir,
         f"[{args.timesteps}]_{args.dataset}_k{args.k}_kernels{args.num_kernels}"
-        f"_base-{args.heuristic}_b{args.b_fraction}{'_opt' if args.opt else ''}.csv")
+        f"_base-{args.heuristic}_b{args.b_fraction}{'_opt' if args.opt else ''}"
+        f"{f'_s{args.seed}' if args.seed is not None else ''}.csv")
 
     run_cpp_experiment(
         drift_sequence=drift_sequence,
@@ -256,6 +273,7 @@ def main():
         opt_threads=args.opt_threads,
         opt_formulation=args.opt_formulation,
         opt_algos=args.opt_algos,
+        seed=args.seed,
     )
 
     print(f"\nExperiment complete. Results saved to: {output_file}")

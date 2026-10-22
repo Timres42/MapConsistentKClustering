@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <cerrno>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -71,8 +72,15 @@ static std::string fmt(double v) {
 struct CsvWriter {
     FILE* f;
     size_t ncols = 0;  // set by the header row; shorter rows are padded with "nan"
-    void row(const std::vector<std::string>& cells) {
-        if (ncols == 0) ncols = cells.size();
+    std::vector<std::string> tail;  // cells appended to every data row (e.g. the seed)
+    void row(const std::vector<std::string>& in) {
+        std::vector<std::string> cells = in;
+        if (ncols == 0) {
+            ncols = cells.size();
+        } else {
+            while (cells.size() + tail.size() < ncols) cells.push_back("nan");
+            cells.insert(cells.end(), tail.begin(), tail.end());
+        }
         for (size_t i = 0; i < std::max(cells.size(), ncols); ++i) {
             if (i) std::fputc(',', f);
             std::fputs(i < cells.size() ? cells[i].c_str() : "nan", f);
@@ -87,7 +95,7 @@ static bool read_i32(FILE* f, int32_t& out) { return std::fread(&out, sizeof(int
 
 static std::vector<Points> load_sequence(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) { std::fprintf(stderr, "cannot open data file %s\n", path.c_str()); std::exit(1); }
+    if (!f) { std::fprintf(stderr, "cannot open data file %s: %s (errno %d)\n", path.c_str(), std::strerror(errno), errno); std::exit(1); }
     int32_t T, d;
     if (!read_i32(f, T) || !read_i32(f, d)) { std::fprintf(stderr, "bad header\n"); std::exit(1); }
     std::vector<Points> seq;
@@ -114,15 +122,27 @@ static HeuristicKind parse_heuristic(const std::string& name) {
 }
 
 // compute_baseline: best of n_restarts fresh-RNG heuristic runs.
+// Seed protocol:
+//   seed >= 0 (--seed S): restart r at timestep t uses mt19937(seed_seq{S, t, r}),
+//                         so every (S, t, r) gets its own, non-overlapping stream.
+//   seed <  0 (default):  legacy seeds 42 + 100 t + r (reproduces earlier results),
+//                         or std::random_device with --reproducible false.
 static Clustering compute_baseline(const Points& P, int k, HeuristicKind kind,
                                    bool reproducible, int t_idx, double& best_cost_out,
-                                   int n_restarts = 5) {
+                                   long long seed = -1, int n_restarts = 5) {
     double best_cost = std::numeric_limits<double>::infinity();
     Clustering best;
     std::random_device rd;
     for (int restart = 0; restart < n_restarts; ++restart) {
-        unsigned int restart_seed = reproducible ? 42 + t_idx * 100 + restart : rd();
-        std::mt19937 generator(restart_seed);
+        std::mt19937 generator;
+        if (seed >= 0) {
+            std::seed_seq seq{(unsigned)(seed & 0xffffffffLL), (unsigned)(seed >> 32),
+                              (unsigned)t_idx, (unsigned)restart};
+            generator.seed(seq);
+        } else {
+            unsigned int restart_seed = reproducible ? 42 + t_idx * 100 + restart : rd();
+            generator.seed(restart_seed);
+        }
         Clustering cand = run_heuristic(kind, P, k, generator);
         double c = cand.cost();
         if (c < best_cost) { best_cost = c; best = cand; }
@@ -192,6 +212,9 @@ int main(int argc, char** argv) {
     double b_frac   = std::stod(b_str);
     //uint64_t seed   = (uint64_t)std::stoll(get_arg(argc, argv, "--seed", "42"));
     bool reproducible = parse_bool(get_arg(argc, argv, "--reproducible", "true"));
+    // Master seed of the k-median++ randomness (see compute_baseline); -1 = legacy seeds.
+    const std::string seed_str = get_arg(argc, argv, "--seed", "-1");
+    const long long seed = std::stoll(seed_str);
     HeuristicKind kind = parse_heuristic(heur_name);
     // Exact reference algorithms (need Gurobi, see opt.hpp):
     //   opt_fid - optimum of the center-identity variant (the problem FID solves)
@@ -221,12 +244,13 @@ int main(int argc, char** argv) {
     std::printf("Loaded %d timesteps with k=%d\n", T, k);
 
     FILE* f = std::fopen(out_path.c_str(), "wb");
-    if (!f) { std::fprintf(stderr, "cannot open output %s\n", out_path.c_str()); return 1; }
-    CsvWriter csv{f};
+    if (!f) { std::fprintf(stderr, "cannot open output %s: %s (errno %d)\n", out_path.c_str(), std::strerror(errno), errno); return 1; }
+    CsvWriter csv{f, 0, {}};
     csv.row({"dataset", "timestep", "num_points", "k", "method", "b_fraction",
              "baseline/sigma used", "b_abs_available", "historical_cost", "result_cost",
              "b_abs_used", "execution_time", "baseline_cost", "relative_cost_ratio",
-             "prev_points", "prev_points_changed", "opt_optimal", "opt_mip_gap"});
+             "prev_points", "prev_points_changed", "opt_optimal", "opt_mip_gap", "seed"});
+    csv.tail = {seed >= 0 ? std::to_string(seed) : std::string("nan")};
 
     // --- Timestep 1: fresh baseline only ---
     const Points& P0 = seq[0];
@@ -234,7 +258,7 @@ int main(int argc, char** argv) {
     int b_abs0 = (int)(b_frac * n0);
     double t0_baseline_cost;
     auto baseline_start = std::chrono::steady_clock::now();
-    Clustering baseline0 = compute_baseline(P0, k, kind, reproducible, 0, t0_baseline_cost);
+    Clustering baseline0 = compute_baseline(P0, k, kind, reproducible, 0, t0_baseline_cost, seed);
     auto baseline_end = std::chrono::steady_clock::now();
     double baseline_elapsed = std::chrono::duration<double>(baseline_end - baseline_start).count();
 
@@ -307,7 +331,7 @@ int main(int argc, char** argv) {
         std::printf("  Computing baseline heuristic...\n");
         double best_baseline_cost;
         baseline_start = std::chrono::steady_clock::now();
-        Clustering baseline = compute_baseline(aug, k, kind, reproducible, t_idx, best_baseline_cost);
+        Clustering baseline = compute_baseline(aug, k, kind, reproducible, t_idx, best_baseline_cost, seed);
         baseline_end = std::chrono::steady_clock::now();
         baseline_elapsed = std::chrono::duration<double>(baseline_end - baseline_start).count();
 
