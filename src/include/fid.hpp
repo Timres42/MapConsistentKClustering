@@ -76,17 +76,26 @@ inline MappedClustering poly_lcc_median_f_id(const Points& P, int k,
 
         std::vector<int> current_assignment = hist_clust.assignment;
 
+        std::vector<bool> is_removed(k, false);
+        for (int i : slots_to_remove) is_removed[i] = true;
+
         struct Regret { double savings; int p; int new_slot; };
         std::vector<Regret> regret_savings;
         for (int p = 0; p < n; ++p) {
             int hist_slot = hist_clust.assignment[p];
-            double cost_if_stay = dist(P, p, candidate_centers[hist_slot]);
             int best_center_idx = 0;
             double bcv = dist(P, p, candidate_centers[0]);
             for (int i = 1; i < k; ++i) {
                 double dd = dist(P, p, candidate_centers[i]);
                 if (dd < bcv) { bcv = dd; best_center_idx = i; }
             }
+            // Points of removed clusters are already paid for by `required`:
+            // they move freely to their nearest center.
+            if (is_removed[hist_slot]) {
+                current_assignment[p] = best_center_idx;
+                continue;
+            }
+            double cost_if_stay = dist(P, p, candidate_centers[hist_slot]);
             double cost_if_move = dist(P, p, candidate_centers[best_center_idx]);
             double savings = cost_if_stay - cost_if_move;
             if (savings > 0 && best_center_idx != hist_slot)
@@ -95,7 +104,8 @@ inline MappedClustering poly_lcc_median_f_id(const Points& P, int k,
         // sort by savings descending, stable (preserves ascending-p insertion order on ties).
         std::stable_sort(regret_savings.begin(), regret_savings.end(),
                          [](const Regret& a, const Regret& b) { return a.savings > b.savings; });
-        int allowed_moves = std::min(budget, (int)regret_savings.size());
+        // Points of kept clusters share the remaining budget.
+        int allowed_moves = std::min(budget - required, (int)regret_savings.size());
         for (int m = 0; m < allowed_moves; ++m)
             current_assignment[regret_savings[m].p] = regret_savings[m].new_slot;
 
