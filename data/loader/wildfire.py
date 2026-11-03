@@ -26,7 +26,8 @@ class USWildfireDataset(BaseTemporalDataset):
                  end_date: str = "2007-08-31",
                  merge: int = 1,
                  step: int = 1,
-                 seed: int = 42):
+                 seed: int = 42,
+                 point_fraction: float = 1.0):
         """
         Initialize the US Wildfire dataset adapter.
         
@@ -36,13 +37,18 @@ class USWildfireDataset(BaseTemporalDataset):
         :param merge: Number of days to merge into each slice
         :param step: Step size for for starting point of slices. We first step and then slice. For example, if merge=3 and step=2, we will take days 1-3, then 3-5, then 5-7, etc.
         :param seed: Random seed for reproducibility
+        :param point_fraction: Fraction of points to retain from each daily slice
         """
         super().__init__(seed)
+        if not 0 < point_fraction <= 1:
+            raise ValueError("point_fraction must be greater than 0 and at most 1.")
         self.db_path = db_path
         self.start_date = start_date
         self.end_date = end_date
         self.merge = merge
         self.step = step
+        self.point_fraction = point_fraction
+        self._sampling_rng = np.random.default_rng(seed)
         self._cached_slices = None
         self._validate_date_range()
     
@@ -151,6 +157,12 @@ class USWildfireDataset(BaseTemporalDataset):
         for calendar_date, day_df in daily_groups:
             feature_matrix = day_df[['x_km', 'y_km']].to_numpy(dtype=float)
             if feature_matrix.shape[0] > 0:
+                if self.point_fraction < 1:
+                    sample_size = max(1, int(round(feature_matrix.shape[0] * self.point_fraction)))
+                    sampled_indices = np.sort(
+                        self._sampling_rng.permutation(feature_matrix.shape[0])[:sample_size]
+                    )
+                    feature_matrix = feature_matrix[sampled_indices]
                 raw_slices.append(feature_matrix)
                 date_index[len(raw_slices) - 1] = calendar_date
         

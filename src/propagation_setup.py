@@ -40,7 +40,9 @@ CPP_DIR = REPO_ROOT
 CPP_BINARY = os.path.join(REPO_ROOT, "build", "propagation")
 
 
-def load_drift_sequence(dataset_name: str, k: int, seed: int, timesteps: int) -> list:
+def load_drift_sequence(
+    dataset_name: str, k: int, seed: int, timesteps: int, point_fraction: float = 1.0
+) -> list:
     """Load a temporal drift sequence for the specified dataset."""
 
     if dataset_name == "uber":
@@ -51,7 +53,12 @@ def load_drift_sequence(dataset_name: str, k: int, seed: int, timesteps: int) ->
 
     elif dataset_name == "wildfire":
         print("Loading US Wildfire Dataset...")
-        dataset_adapter = USWildfireDataset(start_date="2006-06-01", end_date="2006-06-30", seed=seed)
+        dataset_adapter = USWildfireDataset(
+            start_date="2006-06-01",
+            end_date="2006-06-30",
+            seed=seed,
+            point_fraction=point_fraction,
+        )
         pipeline = TemporalDriftPipeline(k=k, seed=seed, timesteps=timesteps)
         drift_sequence = pipeline.execute(dataset_adapter)
 
@@ -107,7 +114,7 @@ def built_with_gurobi() -> bool:
         return "-DUSE_GUROBI" in f.read()
 
 
-def ensure_binary(need_gurobi: bool = False) -> str:
+def ensure_binary(need_opt: bool = False) -> str:
     """Build the C++ core if needed and return the path to the executable."""
     src_files = [
         os.path.join(REPO_ROOT, "Makefile"),
@@ -117,7 +124,7 @@ def ensure_binary(need_gurobi: bool = False) -> str:
         os.path.join(REPO_ROOT, "src", "include", "knapsack.hpp"),
         os.path.join(REPO_ROOT, "src", "include", "form.hpp"),
         os.path.join(REPO_ROOT, "src", "include", "fid.hpp"),
-        os.path.join(REPO_ROOT, "src", "include", "optimal.hpp"),
+        os.path.join(REPO_ROOT, "src", "include", "opt.hpp"),
     ]
     needs_build = not os.path.exists(CPP_BINARY)
     if not needs_build:
@@ -126,15 +133,71 @@ def ensure_binary(need_gurobi: bool = False) -> str:
             if os.path.exists(sp) and os.path.getmtime(sp) > bin_mtime:
                 needs_build = True
                 break
-    if need_gurobi and not built_with_gurobi():
+    if need_opt and not built_with_gurobi():
         needs_build = True  # e.g. built before GUROBI_HOME was set
     if needs_build:
         print("Building C++ core...")
         subprocess.run(["make", "-C", CPP_DIR], check=True)
-    if need_gurobi and not built_with_gurobi():
-        raise SystemExit("--heuristic optimal needs a Gurobi build: set GUROBI_HOME to your Gurobi "
-                         "installation and rerun.")
+    if need_opt and not built_with_gurobi():
+        raise SystemExit("--opt and --heuristic optimal need a Gurobi build: set GUROBI_HOME to your Gurobi "
+                         "installation (see README, 'Optional: Gurobi') and rerun.")
     return CPP_BINARY
+
+
+def run_cpp_experiment(
+    drift_sequence: list,
+    output_file: str,
+    dataset_name: str,
+    k: int,
+    b_fraction: float,
+    heuristic: str,
+    opt: bool = False,
+    opt_time_limit: float = 3600,
+    opt_mip_gap: float = 0.0,
+    opt_threads: int = 0,
+    opt_formulation: str = "benders",
+    opt_algos: str = "fid,mc",
+    quiet: bool = False,
+    seed: int = None,
+    data_path: str = None,
+) -> None:
+    """Serialize a drift sequence and run the C++ propagation core.
+
+    seed: master seed of the k-median++ randomness in the C++ core (None = legacy
+    fixed seeds). data_path: an already serialized drift sequence to reuse (then
+    drift_sequence may be None and the file is kept).
+    """
+    binary = ensure_binary(need_opt=opt or heuristic == "optimal")
+    own_file = data_path is None
+    if own_file:
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
+            data_path = tf.name
+        serialize_sequence(drift_sequence, data_path)
+    cmd = [binary, "--data", data_path, "--out", output_file,
+           "--dataset", dataset_name, "--k", str(k),
+           "--b_fraction", str(b_fraction), "--heuristic", heuristic,
+           "--opt", str(opt).lower(), "--opt_time_limit", str(opt_time_limit),
+           "--opt_mip_gap", str(opt_mip_gap), "--opt_threads", str(opt_threads),
+           "--opt_formulation", opt_formulation, "--opt_algos", opt_algos]
+    if seed is not None:
+        cmd += ["--seed", str(seed)]
+    # Keep normal setup progress visible, but allow batch drivers to suppress it.
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL if quiet else None,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        print("STDERR:", result.stderr)
+        print(f"Binary failed, inspect data at: {data_path}")
+        raise subprocess.CalledProcessError(
+            result.returncode, cmd, output=result.stdout, stderr=result.stderr
+        )
+
+    # Keep the serialized input on failure for debugging.
+    if own_file:
+        os.remove(data_path)
 
 
 def main():
@@ -150,19 +213,34 @@ def main():
                         help="Budget fraction (b / n) - recalculated per timestep")
     parser.add_argument("--timesteps", type=int, default=10,
                         help="Number of sequential time steps to evaluate")
+    parser.add_argument("--point_fraction", type=float, default=1.0,
+                        help="For wildfire, retain this fraction of points per daily slice (0 < fraction <= 1)")
     parser.add_argument("--heuristic", type=str, default="kmedianppwpost",
                         choices=HEURISTIC_CHOICES,
                         help="Baseline strategy; 'optimal' is the exact k-median (needs a Gurobi build)")
-    parser.add_argument("--opt_time_limit", type=float, default=3600,
-                        help="Gurobi time limit in seconds per optimal baseline")
-    parser.add_argument("--opt_mip_gap", type=float, default=0.0,
-                        help="Relative MIP gap at which Gurobi stops (0 = proven optimum)")
-    parser.add_argument("--opt_threads", type=int, default=0,
-                        help="Gurobi threads per optimal baseline (0 = all cores)")
     parser.add_argument("--results_dir", type=str, default="results/propagation",
                         help="Output directory")
     parser.add_argument("--plots_dir", type=str, default="plots/out",
                         help="Output directory for the generated plot")
+    parser.add_argument("--opt", action="store_true",
+                        help="Also run the exact algorithms opt_fid / opt_mc (needs a Gurobi build); the exact "
+                             "k-median of timestep 1 becomes the initial clustering for all algorithms")
+    parser.add_argument("--opt_algos", default="fid,mc",
+                        help="Which exact algorithms to run with --opt: 'fid' (optimum of FID's problem), "
+                             "'mc' (optimum of FORM's problem) or 'fid,mc' (default)")
+    parser.add_argument("--opt_time_limit", type=float, default=3600,
+                        help="Gurobi time limit in seconds per opt solve")
+    parser.add_argument("--opt_mip_gap", type=float, default=0.0,
+                        help="Relative MIP gap at which Gurobi stops (0 = proven optimum)")
+    parser.add_argument("--opt_threads", type=int, default=0,
+                        help="Gurobi threads per opt solve (0 = all cores)")
+    parser.add_argument("--opt_formulation", choices=["benders", "classic"], default="benders",
+                        help="MIP formulation for opt_fid / opt_kmedian: 'benders' (cuts on demand; default) "
+                             "or 'classic' (n^2 + n variables; for cross-checking). opt_mc always uses benders")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Master seed of the k-median++ randomness in the C++ core (restart r at "
+                             "timestep t uses seed_seq(seed, t, r)); default: legacy fixed seeds. "
+                             "The data seed stays 42, so the input data is identical for every seed")
     parser.add_argument("--no_plot", action="store_true",
                         help="Skip generating the plot after the experiment finishes")
     args = parser.parse_args()
@@ -174,34 +252,33 @@ def main():
     seed = 42
 
     # Load drift sequence (Python loaders).
-    drift_sequence = load_drift_sequence(args.dataset, args.k, seed, args.timesteps)
+    drift_sequence = load_drift_sequence(
+        args.dataset, args.k, seed, args.timesteps, args.point_fraction
+    )
     print(f"Loaded {len(drift_sequence)} timesteps with k={args.k}")
 
     # Output CSV path records cluster count separately from kernel count.
     output_file = os.path.join(
         args.results_dir,
         f"[{args.timesteps}]_{args.dataset}_k{args.k}_kernels{args.num_kernels}"
-        f"_base-{args.heuristic}_b{args.b_fraction}.csv")
+        f"_base-{args.heuristic}_b{args.b_fraction}{'_opt' if args.opt else ''}"
+        f"{f'_s{args.seed}' if args.seed is not None else ''}.csv")
 
-    # Serialize the sequence and run the C++ core.
-    binary = ensure_binary(need_gurobi=args.heuristic == "optimal")
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
-        data_path = tf.name
-    serialize_sequence(drift_sequence, data_path)
-    cmd = [binary, "--data", data_path, "--out", output_file,
-           "--dataset", args.dataset, "--k", str(args.k),
-           "--b_fraction", str(args.b_fraction), "--heuristic", args.heuristic,
-           "--opt_time_limit", str(args.opt_time_limit), "--opt_mip_gap", str(args.opt_mip_gap),
-           "--opt_threads", str(args.opt_threads)]
-    # stdout is not captured so the C++ progress output reaches the terminal live.
-    result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        print("STDERR:", result.stderr)
-        print(f"Binary failed, inspect data at: {data_path}")
-        raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=result.stderr)
-
-    # Only clean up on success; keep the temp file around on failure for debugging.
-    os.remove(data_path)
+    run_cpp_experiment(
+        drift_sequence=drift_sequence,
+        output_file=output_file,
+        dataset_name=args.dataset,
+        k=args.k,
+        b_fraction=args.b_fraction,
+        heuristic=args.heuristic,
+        opt=args.opt,
+        opt_time_limit=args.opt_time_limit,
+        opt_mip_gap=args.opt_mip_gap,
+        opt_threads=args.opt_threads,
+        opt_formulation=args.opt_formulation,
+        opt_algos=args.opt_algos,
+        seed=args.seed,
+    )
 
     print(f"\nExperiment complete. Results saved to: {output_file}")
 
