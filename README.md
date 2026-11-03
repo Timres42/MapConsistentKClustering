@@ -47,6 +47,7 @@ earlier Python-only implementation.
   - `core.hpp`: `Points`/`Clustering` structs, Euclidean distance, cost/assignment reductions
   - `heuristics.hpp`: `kmedian_plus_plus` (k-median++ seeding) and `kmedianppwpost` (adds a
     medoid-recentering pass); selected via `--heuristic`
+  - `optimal.hpp`: Exact k-median baseline (`--heuristic optimal`), solved with Gurobi
   - `knapsack.hpp`: Multiple-choice knapsack DP, a subroutine of `form.hpp`
   - `form.hpp`: The `form` algorithm (`poly_lcc_median_fct`) - knapsack-based budgeted reassignment
   - `fid.hpp`: The `fid` algorithm (`poly_lcc_median_f_id`) - identity-mapped, regret-ranked
@@ -81,6 +82,8 @@ earlier Python-only implementation.
 - A C++17 compiler (`g++` or `clang++` - see `Makefile`'s `CXX`)
 - Python 3.x with: `numpy`, `pandas`, `scipy`, `matplotlib`, `seaborn`
 - `openpyxl` (only needed to read the Online Retail dataset's `.xlsx` file via pandas)
+- Gurobi with a valid license (only needed for `--heuristic optimal`): `make` links it when
+  `GUROBI_HOME` points to the installation
 
 ```bash
 pip install numpy pandas scipy matplotlib seaborn openpyxl
@@ -122,8 +125,12 @@ Key arguments (see `propagation_setup.py`'s `argparse` block for the full list a
   batch runner sets it to `MAX_JOBS`)
 - `--b_fraction`: reassignment budget as a fraction of points per timestep, recomputed per timestep
 - `--timesteps`: number of sequential timesteps to evaluate
-- `--heuristic`: `kmedian_plus_plus` or `kmedianppwpost` (default; these are the only two
-  heuristics implemented in `heuristics.hpp`)
+- `--heuristic`: baseline clustering - `kmedian_plus_plus`, `kmedianppwpost` (default; these are
+  the only two heuristics implemented in `heuristics.hpp`), or `optimal` for the exact k-median
+  (`optimal.hpp`, centers are input points). `form` and `fid` then use it as their baseline, and
+  `relative_cost_ratio` is relative to it
+- `--opt_time_limit` / `--opt_mip_gap` / `--opt_threads`: Gurobi settings per `optimal` baseline
+  (defaults: `3600` s, `0`, `0` = all cores; lower the threads when running jobs in parallel)
 - `--results_dir` / `--plots_dir`: output locations (default `results/propagation`, `plots/out`)
 - `--no_plot`: skip plotting after the run
 
@@ -153,7 +160,11 @@ Each row of the results CSV is one (timestep, method) evaluation, with columns: 
 `timestep`, `num_points`, `k`, `method` (`baseline_heuristic`, `hist_form`/`hist_fid` for the
 historical clustering, or `form`/`fid` for the algorithm's result), `b_fraction`, the heuristic
 used, `b_abs_available`, `historical_cost`, `result_cost`, `b_abs_used`, `execution_time`,
-`baseline_cost`, and `relative_cost_ratio` (cost normalized to the fresh baseline).
+`baseline_cost`, `relative_cost_ratio` (cost normalized to the fresh baseline), `prev_points`,
+`prev_points_changed`, `baseline_optimal`, and `baseline_mip_gap`. The last two are set on the
+`baseline_heuristic` rows of `--heuristic optimal` runs (`baseline_optimal` is `0` if the time limit
+stopped Gurobi before proving optimality) and `nan` otherwise. The method name stays
+`baseline_heuristic` for an optimal baseline, so the plotting scripts work unchanged.
 `execution_time` is measured in seconds for each row's method, including the baseline heuristic,
 historical clustering, `form`, and `fid`.
 

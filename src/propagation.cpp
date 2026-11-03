@@ -15,6 +15,7 @@
 #include "heuristics.hpp"
 #include "form.hpp"
 #include "fid.hpp"
+#include "optimal.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -107,7 +108,7 @@ static std::vector<Points> load_sequence(const std::string& path) {
 // ---- experiment components ------------------------------------------------
 static HeuristicKind parse_heuristic(const std::string& name) {
     if (name == "kmedian_plus_plus") return HeuristicKind::KMpp;
-    return HeuristicKind::KMppPost;  // default kmedianppwpost
+    return HeuristicKind::KMppPost;  // default kmedianppwpost, also the MIP start of "optimal"
 }
 
 // compute_baseline: best of n_restarts fresh-RNG heuristic runs.
@@ -126,6 +127,29 @@ static Clustering compute_baseline(const Points& P, int k, HeuristicKind kind,
     }
     best_cost_out = best_cost;
     return best;
+}
+
+// Baseline as selected by --heuristic: compute_baseline, or with "optimal" the exact
+// k-median, warm-started from compute_baseline's solution. The CSV cells say whether the
+// exact solve proved optimality and at which gap ("nan" for the heuristics).
+struct OptimalSettings { bool enabled; double time_limit; double mip_gap; int threads; };
+struct BaselineStatus { std::string optimal = "nan"; std::string mip_gap = "nan"; };
+
+static Clustering select_baseline(const Points& P, int k, HeuristicKind kind, bool reproducible, int t_idx,
+                                  const OptimalSettings& opt, double& cost_out, BaselineStatus& status) {
+    Clustering baseline = compute_baseline(P, k, kind, reproducible, t_idx, cost_out);
+#ifdef USE_GUROBI
+    if (opt.enabled) {
+        OptimalInfo info;
+        baseline = optimal_kmedian(P, k, baseline, opt.time_limit, opt.mip_gap, opt.threads, info);
+        cost_out = baseline.cost();
+        status.optimal = info.optimal ? "1" : "0";
+        status.mip_gap = fmt(info.mip_gap);
+        if (!info.optimal)
+            std::fprintf(stderr, "  [optimal] timestep %d: optimality not proven, gap %g\n", t_idx + 1, info.mip_gap);
+    }
+#endif
+    return baseline;
 }
 
 // create_historical_clustering: nearest-center assignment to given centers.
@@ -190,6 +214,16 @@ int main(int argc, char** argv) {
     //uint64_t seed   = (uint64_t)std::stoll(get_arg(argc, argv, "--seed", "42"));
     bool reproducible = parse_bool(get_arg(argc, argv, "--reproducible", "true"));
     HeuristicKind kind = parse_heuristic(heur_name);
+    OptimalSettings optimal{heur_name == "optimal",
+                            std::stod(get_arg(argc, argv, "--opt_time_limit", "3600")),
+                            std::stod(get_arg(argc, argv, "--opt_mip_gap", "0")),
+                            std::stoi(get_arg(argc, argv, "--opt_threads", "0"))};  // 0 = all cores
+#ifndef USE_GUROBI
+    if (optimal.enabled) {
+        std::fprintf(stderr, "--heuristic optimal requires a build with Gurobi (set GUROBI_HOME, see Makefile)\n");
+        return 1;
+    }
+#endif
 
     std::vector<Points> seq = load_sequence(data_path);
     int T = (int)seq.size();
@@ -201,21 +235,23 @@ int main(int argc, char** argv) {
     csv.row({"dataset", "timestep", "num_points", "k", "method", "b_fraction",
              "baseline/sigma used", "b_abs_available", "historical_cost", "result_cost",
              "b_abs_used", "execution_time", "baseline_cost", "relative_cost_ratio",
-             "prev_points", "prev_points_changed"});
+             "prev_points", "prev_points_changed", "baseline_optimal", "baseline_mip_gap"});
 
     // --- Timestep 1: fresh baseline only ---
     const Points& P0 = seq[0];
     int n0 = P0.n;
     int b_abs0 = (int)(b_frac * n0);
     double t0_baseline_cost;
+    BaselineStatus t0_status;
     auto baseline_start = std::chrono::steady_clock::now();
-    Clustering baseline0 = compute_baseline(P0, k, kind, reproducible, 0, t0_baseline_cost);
+    Clustering baseline0 = select_baseline(P0, k, kind, reproducible, 0, optimal, t0_baseline_cost, t0_status);
     auto baseline_end = std::chrono::steady_clock::now();
     double baseline_elapsed = std::chrono::duration<double>(baseline_end - baseline_start).count();
 
     csv.row({dataset, "1", std::to_string(n0), std::to_string(k), "baseline_heuristic",
              b_str, heur_name, std::to_string(b_abs0), "nan", fmt(t0_baseline_cost),
-             "nan", fmt(baseline_elapsed), fmt(t0_baseline_cost), "1.0", "nan", "nan"});
+             "nan", fmt(baseline_elapsed), fmt(t0_baseline_cost), "1.0", "nan", "nan",
+             t0_status.optimal, t0_status.mip_gap});
 
     // Per-algorithm propagated center coordinates (order matches ALGORITHMS: form, fid).
     const std::vector<std::string> ALGOS = {"form", "fid"};
@@ -258,16 +294,18 @@ int main(int argc, char** argv) {
         std::printf("\nTimestep %d/%d: n=%d, budget=%d\n", t_idx + 1, T, aug.n, b_abs);
 
         // Fresh baseline on the augmented instance.
-        std::printf("  Computing baseline heuristic...\n");
+        std::printf("  Computing baseline %s...\n", heur_name.c_str());
         double best_baseline_cost;
+        BaselineStatus baseline_status;
         baseline_start = std::chrono::steady_clock::now();
-        Clustering baseline = compute_baseline(aug, k, kind, reproducible, t_idx, best_baseline_cost);
+        Clustering baseline = select_baseline(aug, k, kind, reproducible, t_idx, optimal, best_baseline_cost, baseline_status);
         baseline_end = std::chrono::steady_clock::now();
         baseline_elapsed = std::chrono::duration<double>(baseline_end - baseline_start).count();
 
         csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                  "baseline_heuristic", b_str, heur_name, std::to_string(b_abs), "nan",
-                 fmt(best_baseline_cost), "nan", fmt(baseline_elapsed), fmt(best_baseline_cost), "1.0", "nan", "nan"});
+                 fmt(best_baseline_cost), "nan", fmt(baseline_elapsed), fmt(best_baseline_cost), "1.0", "nan", "nan",
+                 baseline_status.optimal, baseline_status.mip_gap});
 
         for (size_t a = 0; a < ALGOS.size(); ++a) {
             const std::string& algo = ALGOS[a];
@@ -293,7 +331,7 @@ int main(int argc, char** argv) {
             double hist_ratio = best_baseline_cost > 0 ? hist_cost / best_baseline_cost : 1.0;
             csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                      "hist_" + algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
-                     fmt(hist_cost), "0", fmt(hist_elapsed), fmt(best_baseline_cost), fmt(hist_ratio), "nan", "nan"});
+                     fmt(hist_cost), "0", fmt(hist_elapsed), fmt(best_baseline_cost), fmt(hist_ratio), "nan", "nan", "nan", "nan"});
 
             auto start = std::chrono::steady_clock::now();
             MappedClustering result = (algo == "form")
@@ -314,7 +352,7 @@ int main(int argc, char** argv) {
                      algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
                      fmt(result_cost), std::to_string(c_dist), fmt(elapsed),
                      fmt(best_baseline_cost), fmt(relative_ratio),
-                     form_prev_points, form_prev_changed});
+                     form_prev_points, form_prev_changed, "nan", "nan"});
 
             // Propagate this algorithm's resulting centers to the next timestep.
             std::vector<double> coords((size_t)k * d);

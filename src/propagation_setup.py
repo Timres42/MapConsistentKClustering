@@ -32,8 +32,8 @@ from src.include.clustering_classes import ClusteringInstance
 # Plotting (stays in Python).
 from plots.scripts.plots_propagation_ratio_bviolin import plot_relative_costs
 
-# Heuristic names accepted by the C++ core.
-HEURISTIC_CHOICES = ["kmedian_plus_plus", "kmedianppwpost"]
+# Baseline names accepted by the C++ core ("optimal" is the exact k-median, needs a Gurobi build).
+HEURISTIC_CHOICES = ["kmedian_plus_plus", "kmedianppwpost", "optimal"]
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CPP_DIR = REPO_ROOT
@@ -98,15 +98,26 @@ def serialize_sequence(drift_sequence: list, path: str) -> None:
             f.write(pts.tobytes())
 
 
-def ensure_binary() -> str:
+def built_with_gurobi() -> bool:
+    """True if the last `make` enabled Gurobi (recorded by the Makefile in build/.build_config)."""
+    config = os.path.join(os.path.dirname(CPP_BINARY), ".build_config")
+    if not os.path.exists(config):
+        return False
+    with open(config) as f:
+        return "-DUSE_GUROBI" in f.read()
+
+
+def ensure_binary(need_gurobi: bool = False) -> str:
     """Build the C++ core if needed and return the path to the executable."""
     src_files = [
+        os.path.join(REPO_ROOT, "Makefile"),
         os.path.join(REPO_ROOT, "src", "propagation.cpp"),
         os.path.join(REPO_ROOT, "src", "include", "core.hpp"),
         os.path.join(REPO_ROOT, "src", "include", "heuristics.hpp"),
         os.path.join(REPO_ROOT, "src", "include", "knapsack.hpp"),
         os.path.join(REPO_ROOT, "src", "include", "form.hpp"),
         os.path.join(REPO_ROOT, "src", "include", "fid.hpp"),
+        os.path.join(REPO_ROOT, "src", "include", "optimal.hpp"),
     ]
     needs_build = not os.path.exists(CPP_BINARY)
     if not needs_build:
@@ -115,9 +126,14 @@ def ensure_binary() -> str:
             if os.path.exists(sp) and os.path.getmtime(sp) > bin_mtime:
                 needs_build = True
                 break
+    if need_gurobi and not built_with_gurobi():
+        needs_build = True  # e.g. built before GUROBI_HOME was set
     if needs_build:
         print("Building C++ core...")
         subprocess.run(["make", "-C", CPP_DIR], check=True)
+    if need_gurobi and not built_with_gurobi():
+        raise SystemExit("--heuristic optimal needs a Gurobi build: set GUROBI_HOME to your Gurobi "
+                         "installation and rerun.")
     return CPP_BINARY
 
 
@@ -135,7 +151,14 @@ def main():
     parser.add_argument("--timesteps", type=int, default=10,
                         help="Number of sequential time steps to evaluate")
     parser.add_argument("--heuristic", type=str, default="kmedianppwpost",
-                        choices=HEURISTIC_CHOICES, help="Heuristic strategy")
+                        choices=HEURISTIC_CHOICES,
+                        help="Baseline strategy; 'optimal' is the exact k-median (needs a Gurobi build)")
+    parser.add_argument("--opt_time_limit", type=float, default=3600,
+                        help="Gurobi time limit in seconds per optimal baseline")
+    parser.add_argument("--opt_mip_gap", type=float, default=0.0,
+                        help="Relative MIP gap at which Gurobi stops (0 = proven optimum)")
+    parser.add_argument("--opt_threads", type=int, default=0,
+                        help="Gurobi threads per optimal baseline (0 = all cores)")
     parser.add_argument("--results_dir", type=str, default="results/propagation",
                         help="Output directory")
     parser.add_argument("--plots_dir", type=str, default="plots/out",
@@ -161,13 +184,15 @@ def main():
         f"_base-{args.heuristic}_b{args.b_fraction}.csv")
 
     # Serialize the sequence and run the C++ core.
-    binary = ensure_binary()
+    binary = ensure_binary(need_gurobi=args.heuristic == "optimal")
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
         data_path = tf.name
     serialize_sequence(drift_sequence, data_path)
     cmd = [binary, "--data", data_path, "--out", output_file,
            "--dataset", args.dataset, "--k", str(args.k),
-           "--b_fraction", str(args.b_fraction), "--heuristic", args.heuristic]
+           "--b_fraction", str(args.b_fraction), "--heuristic", args.heuristic,
+           "--opt_time_limit", str(args.opt_time_limit), "--opt_mip_gap", str(args.opt_mip_gap),
+           "--opt_threads", str(args.opt_threads)]
     # stdout is not captured so the C++ progress output reaches the terminal live.
     result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
