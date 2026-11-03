@@ -93,11 +93,16 @@ earlier Python-only implementation.
 - `compare_runtimes.py`: Compares the runtime of `form`, `fid`, `opt_fid` and `opt_mc` per dataset, `k` and
   `b` (terminal table plus log-scale figures, see [Comparing runtimes](#comparing-runtimes))
 - `plot_wildfire_node_scaling.py`: Creates a separate total-FORM-runtime plot for each
-  `(k, b)` combination from the wildfire point-fraction experiment
+  `(k, b)` combination from the wildfire point-fraction experiment, or with `--summary` one
+  figure of the runtime over the number of points
+- `plots_propagation_runtime.py`: Total and per-timestep runtime of FORM per dataset, side by side
+- `approx_factor_form.py`: FORM / OPT_MC cost ratios as a text report and, with `--tex`, a tex table
+- `result_files.py`: Finds a result CSV, preferring the first available of several baselines
 - `evaluate_seeds.py`: Evaluates the seed study (mean / sd / 95 % CI across seeds, paired
   FORM vs FID comparison with Wilcoxon test, tables and figures)
 - `plots_propagation_ratio_bviolin_multiple.py`, `plots_propagation_ratio_multiple.py`: Used by
-  `run_plots_for_paper.sh` to build multi-panel figures across several runs at once
+  `run_plots_for_paper.sh` to build multi-panel figures across several runs at once; `--opt`
+  reads the results of `--opt` runs and adds `opt_fid` and `opt_mc`
 - `plots_propagation_ratio.py`: Not currently invoked by any script - an older, single-panel
   variant superseded by the `_bviolin` version
 - `maps/`: Standalone scripts to render a dataset's raw geography (`plot_uber_nyc.py`,
@@ -139,7 +144,8 @@ python -m src.wildfire_node_scaling
 python plots/scripts/plot_wildfire_node_scaling.py
 ```
 
-Each result CSV is stored below
+The baseline is the exact k-median, or `kmedianppwpost` for runs where it fails or Gurobi is
+missing. Each result CSV is stored below
 `results/wildfire_node_scaling/fraction_<fraction>/`; the plots are written to
 `plots/wildfire_node_scaling/`. Wildfire points are sampled uniformly without replacement
 within each daily slice. The fixed seed makes samples reproducible and nested across
@@ -283,8 +289,6 @@ Environment variables for the exact algorithms:
   do not compete for the same cores.
 
 The batch runner records `MAX_JOBS` in each CSV filename as `_kernels<MAX_JOBS>`.
-To plot these batch results later with `run_plots_for_paper.sh`, pass the same value
-through `NUM_KERNELS` (for example, `NUM_KERNELS=4 bash plots/scripts/run_plots_for_paper.sh`).
 
 ### Exact algorithms (opt_mc, opt_fid)
 
@@ -409,11 +413,33 @@ the time limit (their runtime equals the limit). Writes the runtime table to
 over `b`, log scale, one panel per `k`) and, with `--per_timestep`, one figure per CSV. The
 timestep-1 `opt_kmedian` row is excluded.
 
-### Plotting for the paper
+### Experiments and plots for the paper
 
 ```bash
+bash run_experiments_plots_paper.sh       # needs a Gurobi build
 bash plots/scripts/run_plots_for_paper.sh
 ```
+
+The first script runs exactly the experiments the second one needs and writes them to
+`results/paper` (`no_opt/`, `opt/`, `wildfire_node_scaling/`; logs in `logs/`). It remembers finished
+runs in `.done/`, so running it again continues after an interruption; delete that folder to start
+over. Runs that fail are listed at the end. Every run uses the exact k-median baseline
+(`--heuristic optimal`), and `kmedianppwpost` if that run fails; the plots prefer the `optimal`
+result of each `(dataset, k, b)` and print a message when they use the other one. `MAX_JOBS`,
+`OPT_THREADS`, `OPT_TIME_LIMIT`, `OPT_MIP_GAP`, `TIMESTEPS` and `RESULTS_ROOT` can be set as
+environment variables. The runs for FORM's runtime measurements finish before the exact
+algorithms start, so these don't disturb the timings.
+
+The second script writes to `plots/paper`:
+
+| File | Content |
+|---|---|
+| `stacked_wildfire_k5_t30_b0.0_0.1_0.5.png` | Cost ratio, its distribution and budget used per `b`, with `opt_fid` and `opt_mc` |
+| `combined_wildfire-k10_wildfire-k20_online_retail-k10_online_retail-k20_t30.png` | Cost ratios of `form`, `fid`, their historical clusterings, `opt_fid` and `opt_mc` |
+| `stacked_<dataset>_k<k>_t30_b0.0_0.01_0.1_0.5_1.0.png` | Per dataset: `k` = 5 and 10 with `opt_fid` and `opt_mc`, `k` = 20 without |
+| `runtime_form_<dataset>.png` | Total and per-timestep runtime of FORM |
+| `runtime_form_wildfire_vs_n.png` | FORM runtime over the number of points on wildfire |
+| `approx_factor_form.tex` (and `.txt`) | Table of the FORM / OPT_MC cost ratio |
 
 ## Notes
 

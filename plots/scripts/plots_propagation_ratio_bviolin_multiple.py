@@ -28,12 +28,16 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from result_files import find_csv
+
 
 PALETTE = {
     "form": "#1f77b4",
     "hist_form": "#7fb3d9",
     "fid": "#ff7f0e",
     "hist_fid": "#ffbb78",
+    "opt_fid": "#2ca02c",
+    "opt_mc": "#d62728",
 }
 
 LINESTYLES = {
@@ -42,6 +46,8 @@ LINESTYLES = {
     "hist_form": "--",
     "fid": "-",
     "hist_fid": "--",
+    "opt_fid": "-",
+    "opt_mc": "-",
 }
 
 METHODS_TO_PLOT = ["form", "hist_form", "fid", "hist_fid"]
@@ -51,6 +57,8 @@ METHOD_NAMES = {
     "hist_form": "HIST FORM",
     "fid": "FID",
     "hist_fid": "HIST FID",
+    "opt_fid": "OPT FID",
+    "opt_mc": "OPT MC",
 }
 
 NON_HIST_METHODS = ["form", "fid"]
@@ -64,29 +72,27 @@ DATASET_NAMES = {
 }
 
 
-def csv_path_for(results_dir, dataset, k, timesteps, heuristic, b, num_kernels=1):
-    filename = f"[{timesteps}]_{dataset}_k{k}_kernels{num_kernels}_base-{heuristic}_b{b}.csv"
-    return Path(results_dir) / dataset / filename
-
-
 def load_dataframes(
-    results_dir, dataset, k, timesteps, heuristic, b_values, num_kernels=1
+    results_dir, dataset, k, timesteps, heuristics, b_values, num_kernels=None, opt=False
 ):
     dataframes = {}
 
     for b in b_values:
-        path = csv_path_for(
-            results_dir,
+        path = find_csv(
+            Path(results_dir) / dataset,
             dataset,
             k,
             timesteps,
-            heuristic,
+            heuristics,
             b,
             num_kernels,
+            opt,
         )
 
-        if not path.exists():
-            raise FileNotFoundError(f"Missing CSV for b={b}: {path}")
+        if path is None:
+            raise FileNotFoundError(
+                f"Missing CSV for {dataset}, k={k}, b={b}, opt={opt} in {results_dir}"
+            )
 
         df = pd.read_csv(path)
 
@@ -274,7 +280,7 @@ def plot_row(ax1, ax2, ax3, df, b, show_left_ratio_axis, show_right_points_axis)
         ax3.set_xticklabels(violin_labels)
 
     ax3.set_title(f"Distribution of Budget Used (max possible = {b})")
-    ax3.set_ylabel("Budget Used (%)")
+    ax3.set_ylabel("Budget Used (fraction of points)")
     ax3.grid(True, alpha=0.3, axis="y")
 
 
@@ -305,9 +311,9 @@ def main():
     )
     parser.add_argument(
         "--num_kernels",
-        default=1,
+        default=None,
         type=int,
-        help="Kernel/job count included in the input CSV filenames.",
+        help="Kernel/job count included in the input CSV filenames (default: any).",
     )
     parser.add_argument(
         "--b_values",
@@ -318,7 +324,14 @@ def main():
     )
     parser.add_argument(
         "--heuristic",
-        default="kmedianppwpost",
+        nargs="+",
+        default=["kmedianppwpost"],
+        help="Baselines in order of preference.",
+    )
+    parser.add_argument(
+        "--opt",
+        action="store_true",
+        help="Read the results of --opt runs and also show OPT FID and OPT MC.",
     )
     parser.add_argument(
         "--results_dir",
@@ -330,6 +343,10 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.opt:
+        METHODS_TO_PLOT.extend(["opt_fid", "opt_mc"])
+        NON_HIST_METHODS.extend(["opt_fid", "opt_mc"])
 
     sns.set_theme(style="whitegrid")
     plt.rcParams.update(
@@ -345,9 +362,10 @@ def main():
         dataset=args.dataset,
         k=args.k,
         timesteps=args.timesteps,
-        heuristic=args.heuristic,
+        heuristics=args.heuristic,
         num_kernels=args.num_kernels,
         b_values=args.b_values,
+        opt=args.opt,
     )
 
     n_rows = len(args.b_values)
@@ -405,7 +423,7 @@ def main():
         left=0.08,
         top=0.92,
         hspace=0.55,
-        wspace=0.28,
+        wspace=0.34,
     )
 
     # Add each b value once on the far left of its row.

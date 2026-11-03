@@ -7,11 +7,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from result_files import find_csv
+
 POINT_FRACTIONS = [round(i / 10, 1) for i in range(1, 11)]
 K_VALUES = [5, 10]
 B_FRACTIONS = [round(i / 10, 1) for i in range(11)]
 TIMESTEPS = 30
-HEURISTIC = "kmedianppwpost"
 
 
 def load_form_metrics(csv_path: Path) -> tuple[float, float]:
@@ -28,6 +29,60 @@ def load_form_metrics(csv_path: Path) -> tuple[float, float]:
     workload = np.sum(point_counts * np.log(point_counts))
     runtime = form["execution_time"].sum()
     return float(runtime), float(workload)
+
+
+def plot_summary(results_dir: Path, output_dir: Path, timesteps: int, heuristics: list[str]) -> None:
+    """One figure: FORM runtime over the number of points, one line per k."""
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    colors = {5: "#1f77b4", 10: "#ff7f0e"}
+
+    for k in K_VALUES:
+        mean_points, mean_runtimes, min_runtimes, max_runtimes, workloads = [], [], [], [], []
+        for point_fraction in POINT_FRACTIONS:
+            runtimes, points, workload = [], [], []
+            for b_fraction in B_FRACTIONS:
+                csv_path = find_csv(
+                    results_dir / f"fraction_{point_fraction}",
+                    "wildfire", k, timesteps, heuristics, b_fraction,
+                )
+                if csv_path is None:
+                    print(f"Missing result: fraction {point_fraction}, k={k}, b={b_fraction}")
+                    continue
+                runtime, run_workload = load_form_metrics(csv_path)
+                results = pd.read_csv(csv_path)
+                runtimes.append(runtime)
+                workload.append(run_workload)
+                points.append(results.loc[results["method"] == "form", "num_points"].mean())
+            if not runtimes:
+                continue
+            mean_points.append(np.mean(points))
+            mean_runtimes.append(np.mean(runtimes))
+            min_runtimes.append(np.min(runtimes))
+            max_runtimes.append(np.max(runtimes))
+            workloads.append(np.mean(workload))
+        if not mean_runtimes:
+            raise ValueError(f"No valid FORM results for k={k} in {results_dir}")
+
+        workloads_array = np.asarray(workloads)
+        runtimes_array = np.asarray(mean_runtimes)
+        coefficient = np.dot(workloads_array, runtimes_array) / np.dot(workloads_array, workloads_array)
+
+        ax.fill_between(mean_points, min_runtimes, max_runtimes, color=colors[k], alpha=0.2)
+        ax.plot(mean_points, mean_runtimes, color=colors[k], marker="o", linewidth=2,
+                label=f"k = {k}: mean over b (band: min to max)")
+        ax.plot(mean_points, coefficient * workloads_array, color=colors[k], linestyle="--", linewidth=1.5,
+                label=rf"k = {k}: $c\sum_t n_t\log(n_t)$, $c={coefficient:.2e}$")
+
+    ax.set_xlabel("Average number of points per timestep")
+    ax.set_ylabel(f"Total FORM runtime over {timesteps} timesteps [s]")
+    ax.set_title("Wildfire: FORM runtime depending on the number of points")
+    ax.grid(alpha=0.3)
+    # Above the axes, so that it cannot cover any data.
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.08), ncol=2)
+    output_path = output_dir / "runtime_form_wildfire_vs_n.png"
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Plot saved to: {output_path}")
 
 
 def main() -> None:
@@ -47,9 +102,17 @@ def main() -> None:
         help="Folder for the generated per-(k,b) plots",
     )
     parser.add_argument("--timesteps", type=int, default=TIMESTEPS)
-    parser.add_argument("--num_kernels", type=int, default=1)
+    parser.add_argument("--num_kernels", type=int, default=None)
+    parser.add_argument("--heuristic", nargs="+", default=["optimal", "kmedianppwpost"],
+                        help="Baselines in order of preference")
+    parser.add_argument("--summary", action="store_true",
+                        help="Create one figure over the number of points instead of one per (k, b)")
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.summary:
+        plot_summary(args.results_dir, args.output_dir, args.timesteps, args.heuristic)
+        return
 
     x = np.arange(len(POINT_FRACTIONS))
     colors = plt.cm.viridis(np.linspace(0, 1, len(POINT_FRACTIONS)))
@@ -59,16 +122,12 @@ def main() -> None:
             runtimes = []
             workloads = []
             for point_fraction in POINT_FRACTIONS:
-                csv_path = (
-                    args.results_dir
-                    / f"fraction_{point_fraction}"
-                    / (
-                        f"[{args.timesteps}]_wildfire_k{k}_kernels{args.num_kernels}"
-                        f"_base-{HEURISTIC}_b{b_fraction}.csv"
-                    )
+                csv_path = find_csv(
+                    args.results_dir / f"fraction_{point_fraction}",
+                    "wildfire", k, args.timesteps, args.heuristic, b_fraction, args.num_kernels,
                 )
-                if not csv_path.exists():
-                    print(f"Missing result: {csv_path}")
+                if csv_path is None:
+                    print(f"Missing result: fraction {point_fraction}, k={k}, b={b_fraction}")
                     runtimes.append(np.nan)
                     workloads.append(np.nan)
                     continue

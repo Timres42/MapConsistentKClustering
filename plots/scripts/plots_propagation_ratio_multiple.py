@@ -42,11 +42,13 @@ Pairwise mode:
 import argparse
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+
+from result_files import find_csv
 
 B_FRACTIONS: Tuple[float, ...] = (0.0, 0.1, 0.5)
 
@@ -55,6 +57,8 @@ PALETTE = {
     "hist_form": "#7fb3d9",
     "fid": "#ff7f0e",
     "hist_fid": "#ffbb78",
+    "opt_fid": "#2ca02c",
+    "opt_mc": "#d62728",
 }
 
 LINESTYLES = {
@@ -63,11 +67,14 @@ LINESTYLES = {
     "hist_form": "--",
     "fid": "-",
     "hist_fid": "--",
+    "opt_fid": "-",
+    "opt_mc": "-",
 }
 
 METHODS_TO_PLOT = ["form", "hist_form", "fid", "hist_fid"]
 NON_HIST_METHODS = ["form", "fid"]
-METHODS_TO_NAMES = {"form": "FORM", "hist_form": "HIST FORM", "fid": "FID", "hist_fid": "HIST FID"}
+METHODS_TO_NAMES = {"form": "FORM", "hist_form": "HIST FORM", "fid": "FID", "hist_fid": "HIST FID",
+                    "opt_fid": "OPT FID", "opt_mc": "OPT MC"}
 
 DATASET_NAMES = {
     "wildfire": "Wildfire Dataset",
@@ -87,36 +94,26 @@ FIG_WSPACE = 0.12
 ROW_TITLE_OFFSET = 0.05  # horizontal gap between a row's left axis and its rotated label
 
 
-def csv_path_for(
-    results_dir: str,
-    dataset: str,
-    k: int,
-    timesteps: int,
-    heuristic: str,
-    b: float,
-    num_kernels: int = 1,
-) -> Path:
-    filename = f"[{timesteps}]_{dataset}_k{k}_kernels{num_kernels}_base-{heuristic}_b{b}.csv"
-    return Path(results_dir) / dataset / filename
-
-
 def load_dataframes(
     results_dir: str,
     dataset: str,
     k: int,
     timesteps: int,
-    heuristic: str,
-    num_kernels: int = 1,
+    heuristics: List[str],
+    num_kernels: Optional[int] = None,
+    opt: bool = False,
 ) -> Dict[float, pd.DataFrame]:
     dataframes: Dict[float, pd.DataFrame] = {}
 
     for b in B_FRACTIONS:
-        csv_path = csv_path_for(
-            results_dir, dataset, k, timesteps, heuristic, b, num_kernels
+        csv_path = find_csv(
+            Path(results_dir) / dataset, dataset, k, timesteps, heuristics, b, num_kernels, opt
         )
 
-        if not csv_path.exists():
-            raise FileNotFoundError(f"Missing CSV for dataset={dataset}, k={k}, b={b}: {csv_path}")
+        if csv_path is None:
+            raise FileNotFoundError(
+                f"Missing CSV for dataset={dataset}, k={k}, b={b}, opt={opt} in {results_dir}"
+            )
 
         df = pd.read_csv(csv_path)
 
@@ -135,7 +132,7 @@ def compute_shared_y_limits(dataframes: Dict[float, pd.DataFrame]) -> Tuple[floa
     """
     Compute y limits using only:
       - b != 0.0
-      - methods 'form' and 'fid'
+      - the non-historical methods
     """
     values = []
 
@@ -143,14 +140,14 @@ def compute_shared_y_limits(dataframes: Dict[float, pd.DataFrame]) -> Tuple[floa
         if b == 0.0:
             continue
 
-        filtered = df[df["method"].isin(["form", "fid"])]
+        filtered = df[df["method"].isin(NON_HIST_METHODS)]
         ratios = filtered["relative_cost_ratio"].dropna()
 
         if not ratios.empty:
             values.append(ratios)
 
     if not values:
-        raise ValueError("No valid relative_cost_ratio values found for b != 0.0 and methods 'form'/'fid'.")
+        raise ValueError("No valid relative_cost_ratio values found for b != 0.0 and the non-historical methods.")
 
     all_values = pd.concat(values, ignore_index=True)
 
@@ -331,8 +328,11 @@ def main() -> None:
         ),
     )
     parser.add_argument("--timesteps", required=True, type=int)
-    parser.add_argument("--num_kernels", default=1, type=int)
-    parser.add_argument("--heuristic", default="kmedianppwpost")
+    parser.add_argument("--num_kernels", default=None, type=int)
+    parser.add_argument("--heuristic", nargs="+", default=["kmedianppwpost"],
+                        help="Baselines in order of preference.")
+    parser.add_argument("--opt", action="store_true",
+                        help="Read the results of --opt runs and also show OPT FID and OPT MC.")
     parser.add_argument("--results_dir", default="results/propagation")
     parser.add_argument("--output_dir", default="plots/paper")
     parser.add_argument(
@@ -351,6 +351,10 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    if args.opt:
+        METHODS_TO_PLOT.extend(["opt_fid", "opt_mc"])
+        NON_HIST_METHODS.extend(["opt_fid", "opt_mc"])
 
     if args.pairwise:
         if len(args.datasets) != len(args.k_values):
@@ -393,6 +397,7 @@ def main() -> None:
             args.timesteps,
             args.heuristic,
             args.num_kernels,
+            args.opt,
         )
         for dataset, k in combinations
     }
