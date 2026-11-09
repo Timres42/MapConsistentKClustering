@@ -9,6 +9,26 @@
 # Overrides, for example:
 #   MAX_JOBS=4 OPT_TIME_LIMIT=1800 ./run_experiments_plots_paper.sh
 
+# Stop all experiments when this script ends or is interrupted. Background jobs of a
+# script ignore Ctrl+C, so they have to be stopped explicitly, including their children.
+kill_tree() {
+  local child children
+  children=$(pgrep -P "$1")
+  kill -TERM "$1" 2>/dev/null
+  for child in $children; do
+    kill_tree "$child"
+  done
+}
+stop_experiments() {
+  trap - EXIT INT TERM HUP
+  local child
+  for child in $(pgrep -P $$); do
+    kill_tree "$child"
+  done
+}
+trap stop_experiments EXIT
+trap 'stop_experiments; exit 130' INT TERM HUP
+
 DATASETS=(wildfire online_retail household_power twitter uber)
 
 TIMESTEPS="${TIMESTEPS:-30}"
@@ -112,7 +132,7 @@ run_one() {
           --results_dir "$results_dir" \
           --opt_time_limit "$OPT_TIME_LIMIT" --opt_mip_gap "$OPT_MIP_GAP" --opt_threads "$OPT_THREADS" \
           ${opt_flag[@]+"${opt_flag[@]}"} > "$LOG_DIR/$key.log" 2>&1; then
-        touch "$DONE_DIR/$key"
+        python -c "import pathlib, sys; pathlib.Path(sys.argv[1]).touch()" "$DONE_DIR/$key"
         echo "Finished $key (baseline $heur)"
         exit 0
       fi
@@ -143,12 +163,14 @@ wait
 # --- Wildfire runtime depending on the number of points (runs sequentially). ---
 if [[ ! -f "$DONE_DIR/wildfire_node_scaling" ]]; then
   echo "Starting wildfire_node_scaling"
-  if python -m src.wildfire_node_scaling \
+  # In the background, because a signal interrupts `wait` but not a foreground command.
+  python -m src.wildfire_node_scaling \
       --results_dir "$RESULTS_ROOT/wildfire_node_scaling" \
       --timesteps "$TIMESTEPS" \
       --opt_time_limit "$OPT_TIME_LIMIT" --opt_mip_gap "$OPT_MIP_GAP" \
-      > "$LOG_DIR/wildfire_node_scaling.log" 2>&1; then
-    touch "$DONE_DIR/wildfire_node_scaling"
+      > "$LOG_DIR/wildfire_node_scaling.log" 2>&1 &
+  if wait $!; then
+    python -c "import pathlib, sys; pathlib.Path(sys.argv[1]).touch()" "$DONE_DIR/wildfire_node_scaling"
     echo "Finished wildfire_node_scaling"
   else
     echo "FAILED wildfire_node_scaling, see $LOG_DIR/wildfire_node_scaling.log"

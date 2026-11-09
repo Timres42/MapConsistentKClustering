@@ -1,5 +1,25 @@
 #!/bin/bash
 
+# Stop all experiments when this script ends or is interrupted. Background jobs of a
+# script ignore Ctrl+C, so they have to be stopped explicitly, including their children.
+kill_tree() {
+  local child children
+  children=$(pgrep -P "$1")
+  kill -TERM "$1" 2>/dev/null
+  for child in $children; do
+    kill_tree "$child"
+  done
+}
+stop_experiments() {
+  trap - EXIT INT TERM HUP
+  local child
+  for child in $(pgrep -P $$); do
+    kill_tree "$child"
+  done
+}
+trap stop_experiments EXIT
+trap 'stop_experiments; exit 130' INT TERM HUP
+
 DATASETS=(
   "wildfire"
   "uber"

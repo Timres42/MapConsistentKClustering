@@ -15,8 +15,10 @@ Run as ``python -m src.propagation_setup ...`` from the repo root.
 import os
 import sys
 import struct
+import signal
 import subprocess
 import tempfile
+import threading
 import argparse
 import numpy as np
 
@@ -38,6 +40,24 @@ HEURISTIC_CHOICES = ["kmedian_plus_plus", "kmedianppwpost", "optimal"]
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CPP_DIR = REPO_ROOT
 CPP_BINARY = os.path.join(REPO_ROOT, "build", "propagation")
+
+# Running C++ processes, stopped when this process receives a termination signal.
+_cpp_processes = set()
+_stopping = threading.Event()
+
+
+def _stop_cpp_processes(signum, frame):
+    """Stop all C++ processes (Gurobi only pauses on Ctrl+C) and unwind the main thread."""
+    _stopping.set()
+    for process in list(_cpp_processes):
+        process.terminate()
+    raise KeyboardInterrupt
+
+
+# Signals that are ignored stay ignored (Ctrl+C in background jobs, nohup).
+for _signal in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    if signal.getsignal(_signal) != signal.SIG_IGN:
+        signal.signal(_signal, _stop_cpp_processes)
 
 
 def load_drift_sequence(
@@ -167,6 +187,8 @@ def run_cpp_experiment(
     fixed seeds). data_path: an already serialized drift sequence to reuse (then
     drift_sequence may be None and the file is kept).
     """
+    if _stopping.is_set():  # queued job of a batch driver
+        raise KeyboardInterrupt
     binary = ensure_binary(need_opt=opt or heuristic == "optimal")
     own_file = data_path is None
     if own_file:
@@ -182,17 +204,32 @@ def run_cpp_experiment(
     if seed is not None:
         cmd += ["--seed", str(seed)]
     # Keep normal setup progress visible, but allow batch drivers to suppress it.
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.DEVNULL if quiet else None,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if result.returncode != 0:
-        print("STDERR:", result.stderr)
+    try:
+        with subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL if quiet else None,
+            stderr=subprocess.PIPE,
+            text=True,
+        ) as process:
+            _cpp_processes.add(process)
+            if _stopping.is_set():
+                process.terminate()
+            try:
+                stdout, stderr = process.communicate()
+            except BaseException:
+                process.kill()
+                raise
+            finally:
+                _cpp_processes.discard(process)
+    except KeyboardInterrupt:
+        if own_file:
+            os.remove(data_path)
+        raise
+    if process.returncode != 0:
+        print("STDERR:", stderr)
         print(f"Binary failed, inspect data at: {data_path}")
         raise subprocess.CalledProcessError(
-            result.returncode, cmd, output=result.stdout, stderr=result.stderr
+            process.returncode, cmd, output=stdout, stderr=stderr
         )
 
     # Keep the serialized input on failure for debugging.
