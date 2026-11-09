@@ -248,6 +248,10 @@ Key arguments (see `propagation_setup.py`'s `argparse` block for the full list a
   or `optimal` for the exact k-median of each instance (needs a Gurobi build), written as an
   `opt_kmedian` row in every timestep. `form` and `fid` still receive the `--heuristic`
   baseline, also as the initial clustering with `--opt`. Has no effect with `--heuristic optimal`
+- `--instances`: `separate` (default): `form` and `fid` each propagate their centers and solve
+  their own instance; `shared`: only `form` propagates, and `fid`, `opt_mc` and `opt_fid` solve
+  the same instance with FORM's historical clustering (only a `hist_form` row is written), so
+  all methods are compared on identical instances and `opt_mc <= opt_fid` holds in every timestep
 - `--results_dir` / `--plots_dir`: output locations (default `results/propagation`, `plots/out`)
 - `--no_plot`: skip plotting after the run
 - `--opt`: also run the exact algorithms (needs a Gurobi build, see above and

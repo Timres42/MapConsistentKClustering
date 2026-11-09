@@ -35,6 +35,8 @@ def main() -> None:
                         help="Baselines, each tried if the previous one fails")
     parser.add_argument("--reference", choices=["baseline", "optimal"], default="baseline",
                         help="Cost the ratios are normalized to (see src.propagation_setup)")
+    parser.add_argument("--instances", choices=["separate", "shared"], default="separate",
+                        help="Which algorithms propagate their centers (see src.propagation_setup)")
     args = parser.parse_args()
     results_root = os.path.abspath(args.results_dir)
 
@@ -76,6 +78,7 @@ def main() -> None:
                             opt_time_limit=args.opt_time_limit,
                             opt_mip_gap=args.opt_mip_gap,
                             reference=args.reference,
+                            instances=args.instances,
                             quiet=True,
                         )
                         break

@@ -181,6 +181,7 @@ def run_cpp_experiment(
     seed: int = None,
     data_path: str = None,
     reference: str = "baseline",
+    instances: str = "separate",
 ) -> None:
     """Serialize a drift sequence and run the C++ propagation core.
 
@@ -188,6 +189,8 @@ def run_cpp_experiment(
     fixed seeds). data_path: an already serialized drift sequence to reuse (then
     drift_sequence may be None and the file is kept). reference: cost the ratios are
     normalized to, 'baseline' or 'optimal' (the exact k-median of each instance).
+    instances: 'separate' (FORM and FID each solve their own instance) or 'shared' (all
+    algorithms solve FORM's instance).
     """
     if _stopping.is_set():  # queued job of a batch driver
         raise KeyboardInterrupt
@@ -203,7 +206,7 @@ def run_cpp_experiment(
            "--opt", str(opt).lower(), "--opt_time_limit", str(opt_time_limit),
            "--opt_mip_gap", str(opt_mip_gap), "--opt_threads", str(opt_threads),
            "--opt_formulation", opt_formulation, "--opt_algos", opt_algos,
-           "--reference", reference]
+           "--reference", reference, "--instances", instances]
     if seed is not None:
         cmd += ["--seed", str(seed)]
     # Keep normal setup progress visible, but allow batch drivers to suppress it.
@@ -262,6 +265,10 @@ def main():
                         help="Cost the ratios are normalized to: the baseline itself (default), or 'optimal', "
                              "the exact k-median of each instance (row opt_kmedian; needs a Gurobi build). "
                              "FORM and FID always receive the baseline")
+    parser.add_argument("--instances", choices=["separate", "shared"], default="separate",
+                        help="'separate' (default): FORM and FID each propagate their centers and solve their own "
+                             "instance; 'shared': only FORM propagates, and FID, opt_mc and opt_fid solve FORM's "
+                             "instance with FORM's historical clustering")
     parser.add_argument("--results_dir", type=str, default="results/propagation",
                         help="Output directory")
     parser.add_argument("--plots_dir", type=str, default="plots/out",
@@ -324,6 +331,7 @@ def main():
         opt_algos=args.opt_algos,
         seed=args.seed,
         reference=args.reference,
+        instances=args.instances,
     )
 
     print(f"\nExperiment complete. Results saved to: {output_file}")
