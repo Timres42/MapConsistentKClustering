@@ -333,7 +333,9 @@ center / anchor if it stays, to the nearest center if it moves. `s` can stay con
 fixed `y` (and `z`) the remaining problem (keep at least `n - b` points, unit weights) has an
 integral LP optimum. The inequalities are generated on demand - first in a cutting-plane loop
 on the LP relaxation, then by a Gurobi callback (lazy constraints at incumbents, user cuts at
-fractional nodes). Model size: `3n` variables plus `k*n` anchor variables for `opt_mc`; memory
+fractional nodes). A parallel Gurobi solve can end on an incumbent whose lazy inequalities it just
+received, so the solve is repeated until the final solution satisfies all of them (up to a total
+violation of `1e-6` relative to its cost). Model size: `3n` variables plus `k*n` anchor variables for `opt_mc`; memory
 mainly two `n x n` neighbor tables (about 40 MB at `n = 1750`).
 
 `opt_fid` (and `opt_kmedian`) can alternatively use the compact assignment MIP with `n^2 + n`

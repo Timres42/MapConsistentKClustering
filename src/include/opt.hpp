@@ -251,6 +251,8 @@ inline MappedClustering opt_finish(const Points& P, int k, const Clustering* his
             result = Clustering(P, ordered, assignment);
         else
             info.solved = false;
+        if (info.solved && !start.centers.empty() && start.cost < result.cost())  // numerical safety net
+            result = Clustering(P, start.centers, start.assignment);
     }
     if (!info.solved) {
         if (!start.centers.empty()) result = Clustering(P, start.centers, start.assignment);
@@ -263,6 +265,30 @@ inline MappedClustering opt_finish(const Points& P, int k, const Clustering* his
     std::vector<int> identity(k);
     std::iota(identity.begin(), identity.end(), 0);
     return {result, identity};
+}
+
+// Branch-and-cut with lazy cuts. A parallel Gurobi solve can end on an incumbent whose lazy
+// cuts it just received, so its cost is underestimated and "optimal" does not hold. So solve
+// again until the final solution satisfies all cuts, up to the relative tolerance of the cuts
+// (smaller violations are within Gurobi's own tolerances and would repeat forever). add_cuts
+// adds the violated cuts and returns their total violation.
+inline void opt_solve_verified(GRBmodel* model, GRBenv* menv, int nvars, std::vector<double> x0,
+                               double time_limit, std::chrono::steady_clock::time_point t0,
+                               const std::function<double(const std::vector<double>&)>& add_cuts) {
+    std::vector<double> x(nvars);
+    while (true) {
+        if (!x0.empty()) grb_check(GRBsetdblattrarray(model, "Start", 0, nvars, x0.data()), menv, "Start");
+        grb_check(GRBsetdblparam(menv, "TimeLimit", std::max(1.0, time_limit - opt_seconds_since(t0))), menv, "TimeLimit");
+        grb_check(GRBoptimize(model), menv, "GRBoptimize (MIP)");
+        int status = 0, solcount = 0;
+        GRBgetintattr(model, "Status", &status);
+        GRBgetintattr(model, "SolCount", &solcount);
+        if (status != GRB_OPTIMAL || solcount == 0) return;
+        grb_check(GRBgetdblattrarray(model, "X", 0, nvars, x.data()), menv, "X (MIP)");
+        double obj = 0.0;
+        grb_check(GRBgetdblattr(model, "ObjVal", &obj), menv, "ObjVal");
+        if (add_cuts(x) <= 1e-6 * std::max(1.0, std::fabs(obj))) return;
+    }
 }
 
 // Picks the k largest y values as centers.
@@ -530,12 +556,16 @@ inline MappedClustering opt_fid_benders(
     std::vector<int> ind;
     std::vector<double> val;
     double rhs = 0.0;
+    double total_violation = 0.0;
     auto add_cuts_at = [&](const std::vector<double>& x, bool force) {
         int added = 0;
+        total_violation = 0.0;
         std::vector<double> xx = x;
         for (int i = 0; i < n; ++i) {
             if (force) xx[C.T0 + i] = -1.0;  // every point gets its tight cut
-            if (opt_separate(C, i, xx.data(), ind, val, rhs) <= 0.0) continue;
+            double violation = opt_separate(C, i, xx.data(), ind, val, rhs);
+            if (violation <= 0.0) continue;
+            total_violation += violation;
             grb_check(GRBaddconstr(model, (int)ind.size(), ind.data(), val.data(), GRB_GREATER_EQUAL, rhs, nullptr),
                       menv, "cut");
             ++added;
@@ -569,14 +599,12 @@ inline MappedClustering opt_fid_benders(
         std::vector<char> bin(n, GRB_BINARY);
         grb_check(GRBsetcharattrarray(model, "VType", C.Y0, n, bin.data()), menv, "VType y");
     }
-    if (!x0.empty()) grb_check(GRBsetdblattrarray(model, "Start", 0, C.nvars, x0.data()), menv, "Start");
     grb_check(GRBsetintparam(menv, "LazyConstraints", 1), menv, "LazyConstraints");
     grb_check(GRBsetintparam(menv, "PreCrush", 1), menv, "PreCrush");
     grb_check(GRBsetdblparam(menv, "MIPGap", mip_gap), menv, "MIPGap");
     grb_check(GRBsetcallbackfunc(model, opt_cut_callback<OptFidCtx>, &C), menv, "callback");
-    double remaining = std::max(1.0, time_limit - opt_seconds_since(t0));
-    grb_check(GRBsetdblparam(menv, "TimeLimit", remaining), menv, "TimeLimit");
-    grb_check(GRBoptimize(model), menv, "GRBoptimize (MIP)");
+    opt_solve_verified(model, menv, C.nvars, x0, time_limit, t0,
+                       [&](const std::vector<double>& sol) { add_cuts_at(sol, false); return total_violation; });
 
     int status = 0, solcount = 0;
     GRBgetintattr(model, "Status", &status);
@@ -785,12 +813,16 @@ inline MappedClustering opt_mc(
     std::vector<int> ind;
     std::vector<double> val;
     double rhs = 0.0;
+    double total_violation = 0.0;
     auto add_cuts_at = [&](const std::vector<double>& xin, bool force) {
         int added = 0;
+        total_violation = 0.0;
         std::vector<double> xx = xin;
         for (int i = 0; i < n; ++i) {
             if (force) xx[C.T0 + i] = -1.0;
-            if (opt_separate(C, i, xx.data(), ind, val, rhs) <= 0.0) continue;
+            double violation = opt_separate(C, i, xx.data(), ind, val, rhs);
+            if (violation <= 0.0) continue;
+            total_violation += violation;
             grb_check(GRBaddconstr(model, (int)ind.size(), ind.data(), val.data(), GRB_GREATER_EQUAL, rhs, nullptr),
                       menv, "cut");
             ++added;
@@ -825,13 +857,12 @@ inline MappedClustering opt_mc(
         if (C.nclus > 0)
             grb_check(GRBsetcharattrarray(model, "VType", C.Z0, C.nclus * n, bin.data()), menv, "VType z");
     }
-    if (!x0.empty()) grb_check(GRBsetdblattrarray(model, "Start", 0, C.nvars, x0.data()), menv, "Start");
     grb_check(GRBsetintparam(menv, "LazyConstraints", 1), menv, "LazyConstraints");
     grb_check(GRBsetintparam(menv, "PreCrush", 1), menv, "PreCrush");
     grb_check(GRBsetdblparam(menv, "MIPGap", mip_gap), menv, "MIPGap");
     grb_check(GRBsetcallbackfunc(model, opt_cut_callback<OptMcCtx>, &C), menv, "callback");
-    grb_check(GRBsetdblparam(menv, "TimeLimit", std::max(1.0, time_limit - opt_seconds_since(t0))), menv, "TimeLimit");
-    grb_check(GRBoptimize(model), menv, "GRBoptimize (MIP)");
+    opt_solve_verified(model, menv, C.nvars, x0, time_limit, t0,
+                       [&](const std::vector<double>& sol) { add_cuts_at(sol, false); return total_violation; });
 
     int status = 0, solcount = 0;
     GRBgetintattr(model, "Status", &status);
