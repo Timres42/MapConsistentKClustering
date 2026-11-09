@@ -437,9 +437,10 @@ runs in `.done/`, so running it again continues after an interruption; delete th
 over. Ctrl+C or killing the script also stops all its running experiments; only `kill -9` cannot be
 handled. Runs that fail are listed at the end. FORM and FID receive the `kmedianppwpost`
 baseline, also as the initial clustering, and all costs are normalized to the exact k-median of
-each instance (`--reference optimal`). `MAX_JOBS`, `OPT_THREADS`, `OPT_TIME_LIMIT`,
+each instance (`--reference optimal`). Only FORM propagates its centers, and all algorithms solve
+FORM's instance (`--instances shared`). `MAX_JOBS`, `OPT_THREADS`, `OPT_TIME_LIMIT`,
 `OPT_MIP_GAP`, `TIMESTEPS`, `RESULTS_ROOT`, `HEURISTICS` (baselines, each tried if the previous
-one fails) and `REFERENCE` can be set as environment variables; the plot script takes
+one fails), `REFERENCE` and `INSTANCES` can be set as environment variables; the plot script takes
 `RESULTS_ROOT`, `PLOTS_DIR` and `BASELINES`. The earlier runs with the exact k-median as the
 baseline of FORM and FID are in `results/paper`; their plots are created with
 `RESULTS_ROOT=results/paper BASELINES="optimal kmedianppwpost"`. The runs for FORM's runtime measurements finish before the exact
