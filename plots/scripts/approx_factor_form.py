@@ -13,6 +13,16 @@ SIBLING_RESULTS = REPO_ROOT / "results" / "propagation_opts"
 DEFAULT_RESULTS = NESTED_RESULTS if NESTED_RESULTS.is_dir() else SIBLING_RESULTS
 DEFAULT_OUTPUT = REPO_ROOT / "plots" / "approx_factor_form.txt"
 REQUIRED_COLUMNS = {"dataset", "timestep", "k", "method", "b_fraction", "result_cost"}
+# Default of \kgap, the extra space between the columns of different k in the tex table. It is the
+# width of an empty column between them, so that the rules under the k headers stop before it.
+K_GAP = "1em"
+GAP_COLUMN = "@{\\hspace{\\tabcolsep}}p{\\kgap}@{\\hspace{\\tabcolsep}}"
+
+
+def join_blocks(cells: list[str], block_size: int) -> str:
+    """Join the cells of a tex row, with an empty cell for the gap column between blocks."""
+    blocks = [cells[i:i + block_size] for i in range(0, len(cells), block_size)]
+    return " & & ".join(" & ".join(block) for block in blocks)
 DATASET_NAMES = {
     "wildfire": "Wildfire",
     "uber": "Uber",
@@ -110,40 +120,56 @@ def format_tex_table(
     ratios: dict[tuple[str, int, float], list[float]],
     unproven: dict[tuple[str, int], int],
 ) -> str:
-    """Booktabs table: one row per dataset and k, mean ratio per b, overall mean and worst timestep."""
+    """Booktabs table: a block of b columns per k, side by side; one row per dataset with the mean
+    ratio, followed by the mean and the worst timestep over all datasets."""
     b_values = sorted({b for _, _, b in ratios})
     dataset_order = {name: i for i, name in enumerate(DATASET_NAMES)}
-    rows = sorted({(dataset, k) for dataset, k, _ in ratios},
-                  key=lambda row: (dataset_order.get(row[0], len(dataset_order)), row[0], row[1]))
+    datasets = sorted({dataset for dataset, _, _ in ratios},
+                      key=lambda dataset: (dataset_order.get(dataset, len(dataset_order)), dataset))
+    k_values = sorted({k for _, k, _ in ratios})
+    columns = [(k, b) for k in k_values for b in b_values]
 
-    header = " & ".join(f"$b={b:g}$" for b in b_values)
+    n = len(b_values)
+    k_header = join_blocks([f"\\multicolumn{{{n}}}{{c}}{{$k={k}$}}" for k in k_values], 1)
+    k_rules = " ".join(
+        f"\\cmidrule(lr){{{2 + i * (n + 1)}-{1 + i * (n + 1) + n}}}" for i in range(len(k_values))
+    )
+    b_header = join_blocks([f"$b={b:g}$" for _ in k_values for b in b_values], n)
+    column_spec = "l" + GAP_COLUMN.join("r" * n for _ in k_values)
     lines = [
         "% Requires \\usepackage{booktabs}.",
-        "\\begin{table}[t]",
+        "\\begin{table*}[t]",
         "\\centering",
-        f"\\begin{{tabular}}{{lr{'r' * len(b_values)}rr}}",
+        f"\\providecommand{{\\kgap}}{{{K_GAP}}}% Extra space between the columns of different k.",
+        f"\\begin{{tabular}}{{{column_spec}}}",
         "\\toprule",
-        f"Dataset & $k$ & {header} & Mean & Max \\\\",
+        f" & {k_header} \\\\",
+        k_rules,
+        f"Dataset & {b_header} \\\\",
         "\\midrule",
     ]
-    for dataset, k in rows:
+    for dataset in datasets:
         cells = []
-        all_values = []
-        for b in b_values:
+        for k, b in columns:
             values = ratios.get((dataset, k, b), [])
             cells.append(f"{sum(values) / len(values):.4f}" if values else "--")
-            all_values.extend(values)
         name = DATASET_NAMES.get(dataset, dataset.replace("_", "\\_"))
-        marker = "$^{\\dagger}$" if unproven.get((dataset, k)) else ""
-        lines.append(
-            f"{name}{marker} & {k} & {' & '.join(cells)} & "
-            f"{sum(all_values) / len(all_values):.4f} & {max(all_values):.4f} \\\\"
-        )
+        marker = "$^{\\dagger}$" if any(unproven.get((dataset, k)) for k in k_values) else ""
+        lines.append(f"{name}{marker} & {join_blocks(cells, n)} \\\\")
+
+    column_ratios = [[r for dataset in datasets for r in ratios.get((dataset, k, b), [])]
+                     for k, b in columns]
+    lines.append("\\midrule")
+    lines.append("Mean & " + join_blocks(
+        [f"{sum(values) / len(values):.4f}" if values else "--" for values in column_ratios], n) + " \\\\")
+    lines.append("Max & " + join_blocks(
+        [f"{max(values):.4f}" if values else "--" for values in column_ratios], n) + " \\\\")
     lines += ["\\bottomrule", "\\end{tabular}"]
 
     caption = (
-        "Approximation factor of FORM: cost of FORM divided by the cost of OPT\\_MC. The $b$ columns "
-        "and Mean average over all timesteps, Max is the largest ratio of a single timestep."
+        "Approximation factor of FORM: cost of FORM divided by the cost of OPT\\_MC, averaged "
+        "over all timesteps. For each $k$ and $b$, Mean averages over the timesteps of all "
+        "datasets, Max is the largest ratio of a single timestep."
     )
     if unproven:
         solves = sum(unproven.values())
@@ -151,7 +177,7 @@ def format_tex_table(
             f" $^{{\\dagger}}$Includes OPT\\_MC solves stopped by the time limit ({solves} in total), "
             "where the ratio is relative to the best solution found rather than the optimum."
         )
-    lines += [f"\\caption{{{caption}}}", "\\label{tab:approx-factor-form}", "\\end{table}"]
+    lines += [f"\\caption{{{caption}}}", "\\label{tab:approx-factor-form}", "\\end{table*}"]
     return "\n".join(lines) + "\n"
 
 

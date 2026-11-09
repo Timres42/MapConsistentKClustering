@@ -81,3 +81,12 @@ python plots/scripts/approx_factor_form.py \
   --results_dir "$OPT_DIR" \
   --output "$PLOTS_DIR/approx_factor_form.txt" \
   --tex "$PLOTS_DIR/approx_factor_form.tex"
+
+# Tables of the runtime factor between OPT_MC and FORM, and between OPT_FID and FID.
+for heuristic in form fid; do
+  python plots/scripts/runtime_factor.py \
+    --heuristic "$heuristic" \
+    --results_dir "$OPT_DIR" \
+    --output "$PLOTS_DIR/runtime_factor_$heuristic.txt" \
+    --tex "$PLOTS_DIR/runtime_factor_$heuristic.tex"
+done
