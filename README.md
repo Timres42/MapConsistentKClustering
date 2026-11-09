@@ -428,8 +428,7 @@ bash plots/scripts/run_plots_for_paper.sh
 ```
 
 The first script runs exactly the experiments the second one needs and writes them to
-`results/paper_kmedianppwpost` (`no_opt/`, `opt/`, `wildfire_node_scaling/`; logs in `logs/`). It first checks that the
-compiled program may write there and stops with a hint if not (macOS can refuse this for `~/Documents`). It remembers finished
+`results/paper_kmedianppwpost` (`no_opt/`, `opt/`, `wildfire_node_scaling/`; logs in `logs/`). It remembers finished
 runs in `.done/`, so running it again continues after an interruption; delete that folder to start
 over. Ctrl+C or killing the script also stops all its running experiments; only `kill -9` cannot be
 handled. Runs that fail are listed at the end. FORM and FID receive the `kmedianppwpost`
