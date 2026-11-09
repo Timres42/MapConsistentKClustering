@@ -24,7 +24,7 @@ LINESTYLES = {
     "hist_fid": "--",
 }
 
-METHODS_TO_PLOT = ["form", "hist_form", "fid", "hist_fid"]
+METHODS_TO_PLOT = ["hist_form", "form", "hist_fid", "fid"]
 NON_HIST_METHODS = ["form", "fid"]
 METHODS_TO_NAMES = {"form":"FORM", "hist_form":"HIST FORM", "fid":"FID", "hist_fid":"HIST FID"}
 

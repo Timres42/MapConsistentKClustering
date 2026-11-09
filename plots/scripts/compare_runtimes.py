@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-METHODS = ["form", "fid", "opt_fid", "opt_mc"]
+METHODS = ["form", "opt_mc", "fid", "opt_fid"]
 OPT_METHODS = ["opt_fid", "opt_mc"]
 NAMES = {"form": "FORM", "fid": "FID", "opt_fid": "OPT FID", "opt_mc": "OPT MC"}
 # Same colors as plots_propagation_ratio_bviolin.py

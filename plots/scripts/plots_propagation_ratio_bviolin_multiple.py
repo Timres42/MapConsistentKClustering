@@ -50,7 +50,7 @@ LINESTYLES = {
     "opt_mc": "-",
 }
 
-METHODS_TO_PLOT = ["form", "hist_form", "fid", "hist_fid"]
+METHODS_TO_PLOT = ["hist_form", "form", "hist_fid", "fid"]
 
 METHOD_NAMES = {
     "form": "FORM",
@@ -345,7 +345,7 @@ def main():
     args = parser.parse_args()
 
     if args.opt:
-        METHODS_TO_PLOT.extend(["opt_fid", "opt_mc"])
+        METHODS_TO_PLOT[:] = ["hist_form", "form", "opt_mc", "hist_fid", "fid", "opt_fid"]
         NON_HIST_METHODS.extend(["opt_fid", "opt_mc"])
 
     sns.set_theme(style="whitegrid")

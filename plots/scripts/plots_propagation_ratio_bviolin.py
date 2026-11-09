@@ -144,7 +144,7 @@ def plot_relative_costs(csv_path: str, output_dir: str = "plots",
     fig.suptitle(f"{dataset_names[dataset]}, k = {k}, b = {b_val}", fontsize=14)
     
     # ============ Plot 1: Relative Cost Ratio over Timesteps ============
-    methods_to_plot = ["form", "hist_form", "fid", "hist_fid"]
+    methods_to_plot = ["hist_form", "form", "hist_fid", "fid"]
     methods_to_names={"form":"FORM", "hist_form":"HIST FORM", "fid":"FID", "hist_fid":"HIST FID"}
     non_hist_methods_to_plot = [method for method in methods_to_plot if not method.startswith("hist_")]
     

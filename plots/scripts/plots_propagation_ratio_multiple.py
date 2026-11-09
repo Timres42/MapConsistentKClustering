@@ -71,7 +71,7 @@ LINESTYLES = {
     "opt_mc": "-",
 }
 
-METHODS_TO_PLOT = ["form", "hist_form", "fid", "hist_fid"]
+METHODS_TO_PLOT = ["hist_form", "form", "hist_fid", "fid"]
 NON_HIST_METHODS = ["form", "fid"]
 METHODS_TO_NAMES = {"form": "FORM", "hist_form": "HIST FORM", "fid": "FID", "hist_fid": "HIST FID",
                     "opt_fid": "OPT FID", "opt_mc": "OPT MC"}
@@ -353,7 +353,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.opt:
-        METHODS_TO_PLOT.extend(["opt_fid", "opt_mc"])
+        METHODS_TO_PLOT[:] = ["hist_form", "form", "opt_mc", "hist_fid", "fid", "opt_fid"]
         NON_HIST_METHODS.extend(["opt_fid", "opt_mc"])
 
     if args.pairwise:
