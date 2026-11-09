@@ -176,6 +176,19 @@ static Clustering select_baseline(const Points& P, int k, HeuristicKind kind, bo
     return baseline;
 }
 
+#ifdef USE_GUROBI
+// --reference optimal: the exact k-median of the instance, warm-started from the baseline.
+// All costs are normalized to it, while FORM and FID still receive the heuristic baseline.
+static Clustering exact_reference(const Points& P, int k, const Clustering& baseline, int t_idx,
+                                  const OptSettings& opt, OptInfo& info) {
+    Clustering reference = opt_kmedian(P, k, {baseline.centers}, opt.time_limit, opt.mip_gap, opt.threads,
+                                       info, opt.formulation).clustering;
+    if (!info.optimal)
+        std::fprintf(stderr, "  [reference] timestep %d: optimality not proven, gap %g\n", t_idx + 1, info.mip_gap);
+    return reference;
+}
+#endif
+
 // create_historical_clustering: nearest-center assignment to given centers.
 static Clustering create_historical_clustering(const Points& P, const std::vector<int>& center_indices) {
     std::vector<int> assignment = assign_points(P, center_indices);
@@ -246,6 +259,14 @@ int main(int argc, char** argv) {
     //   opt_mc  - optimum of the mapping variant, on the instance FORM solves
     bool use_opt          = parse_bool(get_arg(argc, argv, "--opt", "false"));
     const bool optimal_baseline = (heur_name == "optimal");
+    // Cost all ratios are normalized to: the baseline itself, or with "optimal" the exact
+    // k-median of each instance (row "opt_kmedian"); FORM and FID still get the baseline.
+    std::string reference = get_arg(argc, argv, "--reference", "baseline");
+    if (reference != "baseline" && reference != "optimal") {
+        std::fprintf(stderr, "--reference must be baseline or optimal (got '%s')\n", reference.c_str());
+        return 1;
+    }
+    const bool optimal_reference = (reference == "optimal" && !optimal_baseline);
     std::string opt_algos = get_arg(argc, argv, "--opt_algos", "fid,mc");
     const bool run_opt_fid = use_opt && opt_algos.find("fid") != std::string::npos;
     const bool run_opt_mc  = use_opt && opt_algos.find("mc") != std::string::npos;
@@ -260,8 +281,9 @@ int main(int argc, char** argv) {
     const OptSettings opt_settings{opt_time_limit, opt_mip_gap, opt_threads, opt_formulation};
 #ifndef USE_GUROBI
     (void)opt_time_limit; (void)opt_mip_gap; (void)opt_threads; (void)opt_formulation; (void)run_opt_fid; (void)run_opt_mc;
-    if (use_opt || optimal_baseline) {
-        std::fprintf(stderr, "--opt and --heuristic optimal require a build with Gurobi (-DUSE_GUROBI), see opt.hpp\n");
+    if (use_opt || optimal_baseline || optimal_reference) {
+        std::fprintf(stderr, "--opt, --heuristic optimal and --reference optimal require a build with Gurobi "
+                             "(-DUSE_GUROBI), see opt.hpp\n");
         return 1;
     }
 #endif
@@ -291,17 +313,34 @@ int main(int argc, char** argv) {
     auto baseline_end = std::chrono::steady_clock::now();
     double baseline_elapsed = std::chrono::duration<double>(baseline_end - baseline_start).count();
 
+    // Row of the exact reference (--reference optimal), written after the baseline row.
+    std::vector<std::string> reference_row;
+    double t0_reference_cost = t0_baseline_cost;
+#ifdef USE_GUROBI
+    if (optimal_reference) {
+        OptInfo info;
+        t0_reference_cost = exact_reference(P0, k, baseline0, 0, opt_settings, info).cost();
+        reference_row = {dataset, "1", std::to_string(n0), std::to_string(k), "opt_kmedian",
+                         b_str, heur_name, std::to_string(b_abs0), "nan", fmt(t0_reference_cost),
+                         "nan", fmt(info.runtime), fmt(t0_reference_cost), "1.0", "nan", "nan",
+                         info.optimal ? "1" : "0", fmt(info.mip_gap)};
+    }
+#endif
+
     csv.row({dataset, "1", std::to_string(n0), std::to_string(k), "baseline_heuristic",
              b_str, heur_name, std::to_string(b_abs0), "nan", fmt(t0_baseline_cost),
-             "nan", fmt(baseline_elapsed), fmt(t0_baseline_cost), "1.0", "nan", "nan",
+             "nan", fmt(baseline_elapsed), fmt(t0_reference_cost),
+             fmt(t0_reference_cost > 0 ? t0_baseline_cost / t0_reference_cost : 1.0), "nan", "nan",
              t0_status.optimal, t0_status.mip_gap});
+    if (!reference_row.empty()) csv.row(reference_row);
 
     // Initial clustering propagated by every algorithm: the k-median++ baseline, or
     // with --opt the exact k-median optimum of the first timestep (row "opt_kmedian"),
-    // which an optimal baseline already is.
+    // which an optimal baseline already is. With --reference optimal the algorithms
+    // keep the baseline, and the exact k-median is only the reference.
     Clustering init_clust = baseline0;
 #ifdef USE_GUROBI
-    if (use_opt && !optimal_baseline) {
+    if (use_opt && !optimal_baseline && !optimal_reference) {
         std::printf("  Computing exact k-median (opt_kmedian) for timestep 1...\n");
         OptInfo info;
         MappedClustering opt0 = opt_kmedian(P0, k, {baseline0.centers}, opt_time_limit, opt_mip_gap,
@@ -370,13 +409,32 @@ int main(int argc, char** argv) {
         baseline_end = std::chrono::steady_clock::now();
         baseline_elapsed = std::chrono::duration<double>(baseline_end - baseline_start).count();
 
-        csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
-                 "baseline_heuristic", b_str, heur_name, std::to_string(b_abs), "nan",
-                 fmt(best_baseline_cost), "nan", fmt(baseline_elapsed), fmt(best_baseline_cost), "1.0", "nan", "nan",
-                 baseline_status.optimal, baseline_status.mip_gap});
-
         // Center sets of this timestep's solutions, used as MIP start candidates for opt.
         std::vector<std::vector<int>> opt_starts = {baseline.centers};
+
+        // Cost all rows of this timestep are normalized to.
+        double reference_cost = best_baseline_cost;
+        reference_row.clear();
+#ifdef USE_GUROBI
+        if (optimal_reference) {
+            std::printf("  Computing exact k-median reference...\n");
+            OptInfo info;
+            Clustering reference_clust = exact_reference(aug, k, baseline, t_idx, opt_settings, info);
+            reference_cost = reference_clust.cost();
+            opt_starts.push_back(reference_clust.centers);
+            reference_row = {dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
+                             "opt_kmedian", b_str, heur_name, std::to_string(b_abs), "nan",
+                             fmt(reference_cost), "nan", fmt(info.runtime), fmt(reference_cost), "1.0",
+                             "nan", "nan", info.optimal ? "1" : "0", fmt(info.mip_gap)};
+        }
+#endif
+
+        csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
+                 "baseline_heuristic", b_str, heur_name, std::to_string(b_abs), "nan",
+                 fmt(best_baseline_cost), "nan", fmt(baseline_elapsed), fmt(reference_cost),
+                 fmt(reference_cost > 0 ? best_baseline_cost / reference_cost : 1.0), "nan", "nan",
+                 baseline_status.optimal, baseline_status.mip_gap});
+        if (!reference_row.empty()) csv.row(reference_row);
 
         for (size_t a = 0; a < ALGOS.size(); ++a) {
             const std::string& algo = ALGOS[a];
@@ -401,10 +459,10 @@ int main(int argc, char** argv) {
 
             // An exact algorithm shares its heuristic's historical clustering, already in the CSV.
             if (a < algo_coords.size()) {
-                double hist_ratio = best_baseline_cost > 0 ? hist_cost / best_baseline_cost : 1.0;
+                double hist_ratio = reference_cost > 0 ? hist_cost / reference_cost : 1.0;
                 csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                          "hist_" + algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
-                         fmt(hist_cost), "0", fmt(hist_elapsed), fmt(best_baseline_cost), fmt(hist_ratio), "nan", "nan"});
+                         fmt(hist_cost), "0", fmt(hist_elapsed), fmt(reference_cost), fmt(hist_ratio), "nan", "nan"});
             }
 
             auto start = std::chrono::steady_clock::now();
@@ -447,7 +505,7 @@ int main(int argc, char** argv) {
             // (form, fid, opt_mc) or changed center points (opt_fid).
             int c_dist = (algo.rfind("opt_", 0) == 0) ? opt_budget_used
                                                       : cluster_distance(hist_clust, result.clustering, result.mapping);
-            double relative_ratio = best_baseline_cost > 0 ? result_cost / best_baseline_cost : 1.0;
+            double relative_ratio = reference_cost > 0 ? result_cost / reference_cost : 1.0;
 
             // Remember FORM's final labels on X_i for the next instance creation.
             if (algo == "form")
@@ -456,7 +514,7 @@ int main(int argc, char** argv) {
             csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
                      algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
                      fmt(result_cost), std::to_string(c_dist), fmt(elapsed),
-                     fmt(best_baseline_cost), fmt(relative_ratio),
+                     fmt(reference_cost), fmt(relative_ratio),
                      form_prev_points, form_prev_changed, opt_optimal, opt_gap});
 
             // Propagate the resulting centers of FORM and FID to the next timestep.

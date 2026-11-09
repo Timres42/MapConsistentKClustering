@@ -180,16 +180,18 @@ def run_cpp_experiment(
     quiet: bool = False,
     seed: int = None,
     data_path: str = None,
+    reference: str = "baseline",
 ) -> None:
     """Serialize a drift sequence and run the C++ propagation core.
 
     seed: master seed of the k-median++ randomness in the C++ core (None = legacy
     fixed seeds). data_path: an already serialized drift sequence to reuse (then
-    drift_sequence may be None and the file is kept).
+    drift_sequence may be None and the file is kept). reference: cost the ratios are
+    normalized to, 'baseline' or 'optimal' (the exact k-median of each instance).
     """
     if _stopping.is_set():  # queued job of a batch driver
         raise KeyboardInterrupt
-    binary = ensure_binary(need_opt=opt or heuristic == "optimal")
+    binary = ensure_binary(need_opt=opt or heuristic == "optimal" or reference == "optimal")
     own_file = data_path is None
     if own_file:
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
@@ -200,7 +202,8 @@ def run_cpp_experiment(
            "--b_fraction", str(b_fraction), "--heuristic", heuristic,
            "--opt", str(opt).lower(), "--opt_time_limit", str(opt_time_limit),
            "--opt_mip_gap", str(opt_mip_gap), "--opt_threads", str(opt_threads),
-           "--opt_formulation", opt_formulation, "--opt_algos", opt_algos]
+           "--opt_formulation", opt_formulation, "--opt_algos", opt_algos,
+           "--reference", reference]
     if seed is not None:
         cmd += ["--seed", str(seed)]
     # Keep normal setup progress visible, but allow batch drivers to suppress it.
@@ -255,13 +258,18 @@ def main():
     parser.add_argument("--heuristic", type=str, default="kmedianppwpost",
                         choices=HEURISTIC_CHOICES,
                         help="Baseline strategy; 'optimal' is the exact k-median (needs a Gurobi build)")
+    parser.add_argument("--reference", choices=["baseline", "optimal"], default="baseline",
+                        help="Cost the ratios are normalized to: the baseline itself (default), or 'optimal', "
+                             "the exact k-median of each instance (row opt_kmedian; needs a Gurobi build). "
+                             "FORM and FID always receive the baseline")
     parser.add_argument("--results_dir", type=str, default="results/propagation",
                         help="Output directory")
     parser.add_argument("--plots_dir", type=str, default="plots/out",
                         help="Output directory for the generated plot")
     parser.add_argument("--opt", action="store_true",
                         help="Also run the exact algorithms opt_fid / opt_mc (needs a Gurobi build); the exact "
-                             "k-median of timestep 1 becomes the initial clustering for all algorithms")
+                             "k-median of timestep 1 becomes the initial clustering for all algorithms, "
+                             "except with --reference optimal")
     parser.add_argument("--opt_algos", default="fid,mc",
                         help="Which exact algorithms to run with --opt: 'fid' (optimum of FID's instance), "
                              "'mc' (optimum of FORM's instance) or 'fid,mc' (default)")
@@ -315,6 +323,7 @@ def main():
         opt_formulation=args.opt_formulation,
         opt_algos=args.opt_algos,
         seed=args.seed,
+        reference=args.reference,
     )
 
     print(f"\nExperiment complete. Results saved to: {output_file}")

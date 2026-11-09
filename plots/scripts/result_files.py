@@ -6,6 +6,14 @@ from pathlib import Path
 from typing import List, Optional
 
 
+def reference_label(df) -> str:
+    """Legend label of the ratio-1 line: the optimal k-median when the ratios are normalized to
+    it (--heuristic optimal, or --reference optimal with an opt_kmedian row per timestep)."""
+    optimal_baseline = (df["baseline/sigma used"] == "optimal").all() if "baseline/sigma used" in df else False
+    optimal_reference = ((df["method"] == "opt_kmedian") & (df["timestep"] > 1)).any()
+    return "Optimal k-median (ratio=1)" if optimal_baseline or optimal_reference else "Baseline (ratio=1)"
+
+
 def find_csv(
     directory,
     dataset: str,

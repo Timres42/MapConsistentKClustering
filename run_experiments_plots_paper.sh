@@ -4,10 +4,13 @@
 # Finished runs are remembered in $RESULTS_ROOT/.done, so after an interruption the script
 # continues where it stopped (delete that folder to start over). Logs: $RESULTS_ROOT/logs.
 #
-# Every run uses the exact k-median baseline, and kmedianppwpost if that run fails.
+# FORM and FID receive the kmedianppwpost baseline (also as the initial clustering), and all
+# costs are normalized to the exact k-median of each instance (row opt_kmedian).
 #
 # Overrides, for example:
 #   MAX_JOBS=4 OPT_TIME_LIMIT=1800 ./run_experiments_plots_paper.sh
+# The earlier runs with the exact k-median as the baseline of FORM and FID are in results/paper;
+# to continue them: RESULTS_ROOT=results/paper HEURISTICS="optimal kmedianppwpost" REFERENCE=baseline
 
 # Stop all experiments when this script ends or is interrupted. Background jobs of a
 # script ignore Ctrl+C, so they have to be stopped explicitly, including their children.
@@ -32,7 +35,10 @@ trap 'stop_experiments; exit 130' INT TERM HUP
 DATASETS=(wildfire online_retail household_power twitter uber)
 
 TIMESTEPS="${TIMESTEPS:-30}"
-RESULTS_ROOT="${RESULTS_ROOT:-results/paper}"
+RESULTS_ROOT="${RESULTS_ROOT:-results/paper_kmedianppwpost}"
+# Baselines given to FORM and FID, each tried if the previous one fails.
+read -r -a HEURISTICS <<< "${HEURISTICS:-kmedianppwpost}"
+REFERENCE="${REFERENCE:-optimal}"          # cost the ratios are normalized to
 OPT_TIME_LIMIT="${OPT_TIME_LIMIT:-3600}"   # seconds per Gurobi solve
 OPT_MIP_GAP="${OPT_MIP_GAP:-0}"            # 0 = solve to proven optimality
 
@@ -124,11 +130,11 @@ run_one() {
       suffix="_opt"
     fi
     local results_dir="$RESULTS_ROOT/$mode/$ds"
-    for heur in optimal kmedianppwpost; do
+    for heur in "${HEURISTICS[@]}"; do
       echo "Starting $key (baseline $heur)"
       if python -m src.propagation_setup \
           --dataset "$ds" --k "$k" --b_fraction "$b" --timesteps "$TIMESTEPS" \
-          --heuristic "$heur" --num_kernels "$MAX_JOBS" --no_plot \
+          --heuristic "$heur" --reference "$REFERENCE" --num_kernels "$MAX_JOBS" --no_plot \
           --results_dir "$results_dir" \
           --opt_time_limit "$OPT_TIME_LIMIT" --opt_mip_gap "$OPT_MIP_GAP" --opt_threads "$OPT_THREADS" \
           ${opt_flag[@]+"${opt_flag[@]}"} > "$LOG_DIR/$key.log" 2>&1; then
@@ -168,6 +174,7 @@ if [[ ! -f "$DONE_DIR/wildfire_node_scaling" ]]; then
       --results_dir "$RESULTS_ROOT/wildfire_node_scaling" \
       --timesteps "$TIMESTEPS" \
       --opt_time_limit "$OPT_TIME_LIMIT" --opt_mip_gap "$OPT_MIP_GAP" \
+      --heuristics "${HEURISTICS[@]}" --reference "$REFERENCE" \
       > "$LOG_DIR/wildfire_node_scaling.log" 2>&1 &
   if wait $!; then
     python -c "import pathlib, sys; pathlib.Path(sys.argv[1]).touch()" "$DONE_DIR/wildfire_node_scaling"

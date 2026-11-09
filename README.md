@@ -244,6 +244,10 @@ Key arguments (see `propagation_setup.py`'s `argparse` block for the full list a
   the only two heuristics implemented in `heuristics.hpp`), or `optimal` for the exact k-median
   (`opt_kmedian` in `opt.hpp`, centers are input points). `form` and `fid` then use it as their baseline, and
   `relative_cost_ratio` is relative to it
+- `--reference`: cost `relative_cost_ratio` and `baseline_cost` refer to - `baseline` (default),
+  or `optimal` for the exact k-median of each instance (needs a Gurobi build), written as an
+  `opt_kmedian` row in every timestep. `form` and `fid` still receive the `--heuristic`
+  baseline, also as the initial clustering with `--opt`. Has no effect with `--heuristic optimal`
 - `--results_dir` / `--plots_dir`: output locations (default `results/propagation`, `plots/out`)
 - `--no_plot`: skip plotting after the run
 - `--opt`: also run the exact algorithms (needs a Gurobi build, see above and
@@ -351,7 +355,8 @@ With `--opt`:
 - **Timestep 1**: the exact (unconstrained) k-median of X_1 (`opt_kmedian`) replaces the
   k-median++ baseline as the initial clustering of **all** algorithms, and is written as an
   `opt_kmedian` row for timestep 1. With `--heuristic optimal` the baseline already is this
-  optimum, so it is reused and no `opt_kmedian` row is written.
+  optimum, so it is reused and no `opt_kmedian` row is written. With `--reference optimal` the
+  heuristic baseline stays the initial clustering.
 - **Later timesteps**: only `form` and `fid` propagate their centers, so each X_i contains the
   previous centers of these two. The centers of `opt_fid` and `opt_mc` are not added to the next
   instance, so `--opt_algos` does not change the instances. Apart from the initial clustering
@@ -366,10 +371,11 @@ With `--opt`:
 Each row of the results CSV is one (timestep, method) evaluation, with columns: `dataset`,
 `timestep`, `num_points`, `k`, `method` (`baseline_heuristic`; `hist_form`/`hist_fid` for the
 historical clustering, shared with `opt_mc`/`opt_fid`; `form`/`fid`/`opt_fid`/`opt_mc` for
-the algorithm's result; `opt_kmedian` for the exact k-median of timestep 1), `b_fraction`,
-the heuristic used, `b_abs_available`, `historical_cost`, `result_cost`, `b_abs_used`,
-`execution_time`, `baseline_cost`, `relative_cost_ratio` (cost normalized to the fresh
-baseline), and:
+the algorithm's result; `opt_kmedian` for the exact k-median of timestep 1, or of every
+timestep with `--reference optimal`), `b_fraction`, the heuristic used, `b_abs_available`,
+`historical_cost`, `result_cost`, `b_abs_used`, `execution_time`, `baseline_cost`,
+`relative_cost_ratio` (cost normalized to the fresh baseline, or with `--reference optimal` to
+the `opt_kmedian` row of the same timestep), and:
 - `prev_points`, `prev_points_changed` (only in `form` rows): points of X_i whose coordinates
   already occur in X_{i-1}, and how many of them changed their FORM center through the
   instance creation (nearest-center assignment to the propagated centers)
@@ -422,15 +428,18 @@ bash plots/scripts/run_plots_for_paper.sh
 ```
 
 The first script runs exactly the experiments the second one needs and writes them to
-`results/paper` (`no_opt/`, `opt/`, `wildfire_node_scaling/`; logs in `logs/`). It first checks that the
+`results/paper_kmedianppwpost` (`no_opt/`, `opt/`, `wildfire_node_scaling/`; logs in `logs/`). It first checks that the
 compiled program may write there and stops with a hint if not (macOS can refuse this for `~/Documents`). It remembers finished
 runs in `.done/`, so running it again continues after an interruption; delete that folder to start
 over. Ctrl+C or killing the script also stops all its running experiments; only `kill -9` cannot be
-handled. Runs that fail are listed at the end. Every run uses the exact k-median baseline
-(`--heuristic optimal`), and `kmedianppwpost` if that run fails; the plots prefer the `optimal`
-result of each `(dataset, k, b)` and print a message when they use the other one. `MAX_JOBS`,
-`OPT_THREADS`, `OPT_TIME_LIMIT`, `OPT_MIP_GAP`, `TIMESTEPS` and `RESULTS_ROOT` can be set as
-environment variables. The runs for FORM's runtime measurements finish before the exact
+handled. Runs that fail are listed at the end. FORM and FID receive the `kmedianppwpost`
+baseline, also as the initial clustering, and all costs are normalized to the exact k-median of
+each instance (`--reference optimal`). `MAX_JOBS`, `OPT_THREADS`, `OPT_TIME_LIMIT`,
+`OPT_MIP_GAP`, `TIMESTEPS`, `RESULTS_ROOT`, `HEURISTICS` (baselines, each tried if the previous
+one fails) and `REFERENCE` can be set as environment variables; the plot script takes
+`RESULTS_ROOT`, `PLOTS_DIR` and `BASELINES`. The earlier runs with the exact k-median as the
+baseline of FORM and FID are in `results/paper`; their plots are created with
+`RESULTS_ROOT=results/paper BASELINES="optimal kmedianppwpost"`. The runs for FORM's runtime measurements finish before the exact
 algorithms start, so these don't disturb the timings.
 
 The second script writes to `plots/paper`:

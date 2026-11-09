@@ -31,6 +31,10 @@ def main() -> None:
                         help="Gurobi time limit in seconds per solve")
     parser.add_argument("--opt_mip_gap", type=float, default=0.0,
                         help="Relative MIP gap at which Gurobi stops (0 = proven optimum)")
+    parser.add_argument("--heuristics", nargs="+", default=HEURISTICS,
+                        help="Baselines, each tried if the previous one fails")
+    parser.add_argument("--reference", choices=["baseline", "optimal"], default="baseline",
+                        help="Cost the ratios are normalized to (see src.propagation_setup)")
     args = parser.parse_args()
     results_root = os.path.abspath(args.results_dir)
 
@@ -55,7 +59,7 @@ def main() -> None:
                     f"k={k}, b={b_fraction}",
                     flush=True,
                 )
-                for heuristic in HEURISTICS:
+                for heuristic in args.heuristics:
                     output_file = os.path.join(
                         results_dir,
                         f"[{args.timesteps}]_wildfire_k{k}_kernels1"
@@ -71,6 +75,7 @@ def main() -> None:
                             heuristic=heuristic,
                             opt_time_limit=args.opt_time_limit,
                             opt_mip_gap=args.opt_mip_gap,
+                            reference=args.reference,
                             quiet=True,
                         )
                         break
@@ -78,7 +83,7 @@ def main() -> None:
                         # A partial result must not be picked up by the plots.
                         if os.path.exists(output_file):
                             os.remove(output_file)
-                        if heuristic == HEURISTICS[-1]:
+                        if heuristic == args.heuristics[-1]:
                             raise
                         print(f"Baseline {heuristic} failed, trying the next one", flush=True)
 

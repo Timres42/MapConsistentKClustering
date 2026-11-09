@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from result_files import find_csv
+from result_files import find_csv, reference_label
 
 
 PALETTE = {
@@ -114,7 +114,7 @@ def plot_row(ax1, ax2, ax3, df, b, show_left_ratio_axis, show_right_points_axis)
         linestyle=":",
         linewidth=1.5,
         alpha=0.7,
-        label="Baseline (ratio=1)",
+        label=reference_label(df),
     )
 
     for method in METHODS_TO_PLOT:

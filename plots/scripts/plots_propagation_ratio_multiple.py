@@ -48,7 +48,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from result_files import find_csv
+from result_files import find_csv, reference_label
 
 B_FRACTIONS: Tuple[float, ...] = (0.0, 0.1, 0.5)
 
@@ -175,7 +175,7 @@ def plot_panel(
         linestyle=":",
         linewidth=1.5,
         alpha=0.7,
-        label="Baseline (ratio=1)",
+        label=reference_label(df),
     )
 
     for method in METHODS_TO_PLOT:
