@@ -14,6 +14,15 @@ def reference_label(df) -> str:
     return "Optimal k-median (ratio=1)" if optimal_baseline or optimal_reference else "Baseline (ratio=1)"
 
 
+def method_names(names: dict, df) -> dict:
+    """Display names for df: with --instances shared there is one historical clustering for all
+    algorithms (row hist_form only), shown as "HIST"."""
+    methods = set(df["method"])
+    if "hist_form" in methods and "hist_fid" not in methods and "fid" in methods:
+        return {**names, "hist_form": "HIST"}
+    return names
+
+
 def find_csv(
     directory,
     dataset: str,

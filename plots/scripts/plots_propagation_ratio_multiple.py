@@ -48,7 +48,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from result_files import find_csv, reference_label
+from result_files import find_csv, method_names, reference_label
 
 B_FRACTIONS: Tuple[float, ...] = (0.0, 0.1, 0.5)
 
@@ -191,7 +191,7 @@ def plot_panel(
         ax.plot(
             method_data["timestep"],
             method_data["relative_cost_ratio"],
-            label=METHODS_TO_NAMES[method],
+            label=method_names(METHODS_TO_NAMES, df)[method],
             color=PALETTE.get(method, "gray"),
             linestyle=LINESTYLES.get(method, "-"),
             linewidth=2,

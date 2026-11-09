@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from result_files import find_csv, reference_label
+from result_files import find_csv, method_names, reference_label
 
 
 PALETTE = {
@@ -105,6 +105,7 @@ def load_dataframes(
 
 
 def plot_row(ax1, ax2, ax3, df, b, show_left_ratio_axis, show_right_points_axis):
+    names = method_names(METHOD_NAMES, df)
     # ============================================================
     # Plot 1: Relative cost ratio over timesteps
     # ============================================================
@@ -124,7 +125,7 @@ def plot_row(ax1, ax2, ax3, df, b, show_left_ratio_axis, show_right_points_axis)
             ax1.plot(
                 method_data["timestep"],
                 method_data["relative_cost_ratio"],
-                label=METHOD_NAMES[method],
+                label=names[method],
                 color=PALETTE.get(method, "gray"),
                 linestyle=LINESTYLES.get(method, "-"),
                 linewidth=2,
@@ -197,7 +198,7 @@ def plot_row(ax1, ax2, ax3, df, b, show_left_ratio_axis, show_right_points_axis)
 
                 if ratios:
                     box_data.append(ratios)
-                    box_labels.append(METHOD_NAMES[method])
+                    box_labels.append(names[method])
                     box_colors.append(PALETTE.get(method, "gray"))
 
         bp = ax2.boxplot(
@@ -255,7 +256,7 @@ def plot_row(ax1, ax2, ax3, df, b, show_left_ratio_axis, show_right_points_axis)
 
             if not percentage_used.empty:
                 violin_data.append(percentage_used.values)
-                violin_labels.append(METHOD_NAMES[method])
+                violin_labels.append(names[method])
                 violin_colors.append(PALETTE.get(method, "gray"))
 
     if violin_data:
