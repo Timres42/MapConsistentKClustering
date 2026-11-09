@@ -15,6 +15,7 @@ build/
 
 # Ignore IDE and OS files
 .DS_Store
+.scratchpad/
 
 # Others
 TODO*
