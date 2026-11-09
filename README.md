@@ -87,9 +87,9 @@ earlier Python-only implementation.
   creation (mean, standard deviation, max; absolute and in % of all points)
 - `plots_propagation_ratio_bviolin.py`: Used by `propagation_setup.py` and `run_experiments.sh`
   to plot `relative_cost_ratio` per method (line, box and budget-used violin plot) for a given
-  budget fraction; includes `opt_fid` (green) and `opt_mc` (red) with their historical
-  clusterings when present (hollow markers where Gurobi hit the time limit; the timestep-1
-  `opt_kmedian` row is left out; older results with method `opt` are read as `opt_fid`)
+  budget fraction; includes `opt_fid` (green) and `opt_mc` (red) when present (hollow markers
+  where Gurobi hit the time limit; the timestep-1 `opt_kmedian` row is left out; older results
+  with method `opt` are read as `opt_fid`, and their `hist_opt_*` rows are shown as well)
 - `compare_runtimes.py`: Compares the runtime of `form`, `fid`, `opt_fid` and `opt_mc` per dataset, `k` and
   `b` (terminal table plus log-scale figures, see [Comparing runtimes](#comparing-runtimes))
 - `plot_wildfire_node_scaling.py`: Creates a separate total-FORM-runtime plot for each
@@ -281,7 +281,7 @@ RUN_OPT=1 OPT_TIME_LIMIT=1800 ./run_experiments.sh
 Environment variables for the exact algorithms:
 - `RUN_OPT=1`: pass `--opt` to every run. These results go to `results/propagation_opt` and
   `plots/propagation_opt` (override with `RESULTS_DIR` / `PLOTS_DIR`), because `--opt` changes
-  the initial clustering and the instances of all algorithms (see below).
+  the initial clustering of all algorithms (see below).
 - `OPT_ALGOS` (default `fid,mc`), `OPT_TIME_LIMIT` (default `3600`), `OPT_MIP_GAP` (default
   `0`), `OPT_FORMULATION` (default `benders`): passed to `--opt_algos`, `--opt_time_limit`,
   `--opt_mip_gap` and `--opt_formulation`.
@@ -292,8 +292,9 @@ The batch runner records `MAX_JOBS` in each CSV filename as `_kernels<MAX_JOBS>`
 
 ### Exact algorithms (opt_mc, opt_fid)
 
-Both exact algorithms get the same input as the heuristics: the historical clustering (every
-point of X_i assigned to the nearest of the algorithm's previous centers) and the budget `b`.
+Each exact algorithm solves exactly the instance of its heuristic in every timestep: `opt_mc`
+gets FORM's historical clustering (every point of X_i assigned to the nearest of FORM's previous
+centers) and `opt_fid` FID's, each with the same budget `b`.
 
 **`opt_mc` - optimum of FORM's problem (mapping variant).** Find `k` center points, an
 assignment `sigma` and a function `f` from the historical clusters to the new centers (the
@@ -301,13 +302,13 @@ assignment `sigma` and a function `f` from the historical clusters to the new ce
 that at most `b` points change their assignment modulo `f`, i.e. `sigma(p) != f(H(p))`.
 For a fixed center set the best anchors and movers follow from exactly FORM's multiple-choice
 knapsack; FORM is therefore optimal for the baseline's centers, and `opt_mc` additionally
-optimizes the center set. `opt_mc <= FORM` for the same historical clustering.
+optimizes the center set. So `opt_mc <= FORM` in every timestep.
 
 **`opt_fid` - optimum of FID's problem (center-identity variant).** Every point `p` has its
 historical center *point* `h(p)`; at most `b` points may end up at a different center point.
 A point whose historical center is replaced counts against the budget even if it stays in the
-"same" cluster. `opt_mc <= opt_fid <= FID` for the same historical clustering (FID only when it
-stays within this budget, see below).
+"same" cluster. FID stays within this budget, so `opt_fid <= FID` in every timestep. `opt_mc`
+and `opt_fid` start from different historical clusterings, so they are not ordered in general.
 
 **Formulation.** Both use a Benders/radius formulation after Duran-Mateluna, Ales & Elloumi,
 *An efficient Benders decomposition for the p-median problem* (EJOR 2023), extended by the
@@ -351,22 +352,20 @@ With `--opt`:
   k-median++ baseline as the initial clustering of **all** algorithms, and is written as an
   `opt_kmedian` row for timestep 1. With `--heuristic optimal` the baseline already is this
   optimum, so it is reused and no `opt_kmedian` row is written.
-- **Later timesteps**: `opt_fid` and `opt_mc` propagate their own centers like `form` and
-  `fid`, so each X_i also contains their previous centers. Results with and without `--opt`
-  (or with different `--opt_algos`) are therefore not directly comparable.
+- **Later timesteps**: only `form` and `fid` propagate their centers, so each X_i contains the
+  previous centers of these two. The centers of `opt_fid` and `opt_mc` are not added to the next
+  instance, so `--opt_algos` does not change the instances. Apart from the initial clustering
+  above, `--opt` does not change them either.
 - **Scale**: instances of a few thousand points are practical; the time goes into
   branch-and-bound over the center choice (for `opt_mc` also the anchors). Use
   `--opt_time_limit` and check `opt_optimal` / `opt_mip_gap` in the CSV. The progress line per
   solve shows the LP phase (`LP <seconds>, <rounds> rounds, <cuts> cuts`).
-- **FID and its budget**: FID can exceed the center-identity budget (it allows up to `budget`
-  extra moves on top of the points of replaced clusters), so in those timesteps it is not
-  comparable to `opt_fid`.
 
 ### Output format
 
 Each row of the results CSV is one (timestep, method) evaluation, with columns: `dataset`,
-`timestep`, `num_points`, `k`, `method` (`baseline_heuristic`; `hist_form`/`hist_fid`/
-`hist_opt_fid`/`hist_opt_mc` for the historical clustering; `form`/`fid`/`opt_fid`/`opt_mc` for
+`timestep`, `num_points`, `k`, `method` (`baseline_heuristic`; `hist_form`/`hist_fid` for the
+historical clustering, shared with `opt_mc`/`opt_fid`; `form`/`fid`/`opt_fid`/`opt_mc` for
 the algorithm's result; `opt_kmedian` for the exact k-median of timestep 1), `b_fraction`,
 the heuristic used, `b_abs_available`, `historical_cost`, `result_cost`, `b_abs_used`,
 `execution_time`, `baseline_cost`, `relative_cost_ratio` (cost normalized to the fresh

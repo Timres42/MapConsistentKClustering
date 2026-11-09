@@ -263,8 +263,8 @@ def main():
                         help="Also run the exact algorithms opt_fid / opt_mc (needs a Gurobi build); the exact "
                              "k-median of timestep 1 becomes the initial clustering for all algorithms")
     parser.add_argument("--opt_algos", default="fid,mc",
-                        help="Which exact algorithms to run with --opt: 'fid' (optimum of FID's problem), "
-                             "'mc' (optimum of FORM's problem) or 'fid,mc' (default)")
+                        help="Which exact algorithms to run with --opt: 'fid' (optimum of FID's instance), "
+                             "'mc' (optimum of FORM's instance) or 'fid,mc' (default)")
     parser.add_argument("--opt_time_limit", type=float, default=3600,
                         help="Gurobi time limit in seconds per opt solve")
     parser.add_argument("--opt_mip_gap", type=float, default=0.0,

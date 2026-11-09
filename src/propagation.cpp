@@ -242,8 +242,8 @@ int main(int argc, char** argv) {
     const long long seed = std::stoll(seed_str);
     HeuristicKind kind = parse_heuristic(heur_name);
     // Exact reference algorithms (need Gurobi, see opt.hpp):
-    //   opt_fid - optimum of the center-identity variant (the problem FID solves)
-    //   opt_mc  - optimum of the mapping variant (the problem FORM solves)
+    //   opt_fid - optimum of the center-identity variant, on the instance FID solves
+    //   opt_mc  - optimum of the mapping variant, on the instance FORM solves
     bool use_opt          = parse_bool(get_arg(argc, argv, "--opt", "false"));
     const bool optimal_baseline = (heur_name == "optimal");
     std::string opt_algos = get_arg(argc, argv, "--opt_algos", "fid,mc");
@@ -316,12 +316,14 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    // Per-algorithm propagated center coordinates (order matches ALGOS).
+    // Only FORM and FID propagate their centers. Each exact algorithm solves the instance
+    // of its heuristic (instance_of: index into algo_coords) and its centers are dropped.
     std::vector<std::string> ALGOS = {"form", "fid"};
-    if (run_opt_fid) ALGOS.push_back("opt_fid");
-    if (run_opt_mc) ALGOS.push_back("opt_mc");
+    std::vector<size_t> instance_of = {0, 1};
     std::vector<std::vector<double>> algo_coords(ALGOS.size());  // each k*d, laid out row-major
-    for (size_t a = 0; a < ALGOS.size(); ++a) {
+    if (run_opt_fid) { ALGOS.push_back("opt_fid"); instance_of.push_back(1); }
+    if (run_opt_mc) { ALGOS.push_back("opt_mc"); instance_of.push_back(0); }
+    for (size_t a = 0; a < algo_coords.size(); ++a) {
         std::vector<double> coords((size_t)k * P0.d);
         for (int c = 0; c < k; ++c)
             std::memcpy(&coords[(size_t)c * P0.d], P0.row(init_clust.centers[c]), sizeof(double) * P0.d);
@@ -339,15 +341,15 @@ int main(int argc, char** argv) {
         int n_t = Pt.n;
         int d = Pt.d;
 
-        // Build the augmented instance: current points + every algo's previous centers.
+        // Build the augmented instance: current points + the previous centers of FORM and FID.
         Points aug;
         aug.d = d;
-        aug.n = n_t + (int)ALGOS.size() * k;
+        aug.n = n_t + (int)algo_coords.size() * k;
         aug.data.reserve((size_t)aug.n * d);
         aug.data.insert(aug.data.end(), Pt.data.begin(), Pt.data.end());
-        std::vector<std::vector<int>> center_idx_map(ALGOS.size());
+        std::vector<std::vector<int>> center_idx_map(algo_coords.size());
         int cursor = n_t;
-        for (size_t a = 0; a < ALGOS.size(); ++a) {
+        for (size_t a = 0; a < algo_coords.size(); ++a) {
             aug.data.insert(aug.data.end(), algo_coords[a].begin(), algo_coords[a].end());
             center_idx_map[a].resize(k);
             for (int c = 0; c < k; ++c) center_idx_map[a][c] = cursor + c;
@@ -381,7 +383,7 @@ int main(int argc, char** argv) {
             std::printf("  Evaluating %s...\n", algo.c_str());
 
             auto hist_start = std::chrono::steady_clock::now();
-            Clustering hist_clust = create_historical_clustering(aug, center_idx_map[a]);
+            Clustering hist_clust = create_historical_clustering(aug, center_idx_map[instance_of[a]]);
             auto hist_end = std::chrono::steady_clock::now();
             double hist_elapsed = std::chrono::duration<double>(hist_end - hist_start).count();
             double hist_cost = hist_clust.cost();
@@ -397,10 +399,13 @@ int main(int argc, char** argv) {
                 form_prev_changed = std::to_string(ms.changed);
             }
 
-            double hist_ratio = best_baseline_cost > 0 ? hist_cost / best_baseline_cost : 1.0;
-            csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
-                     "hist_" + algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
-                     fmt(hist_cost), "0", fmt(hist_elapsed), fmt(best_baseline_cost), fmt(hist_ratio), "nan", "nan"});
+            // An exact algorithm shares its heuristic's historical clustering, already in the CSV.
+            if (a < algo_coords.size()) {
+                double hist_ratio = best_baseline_cost > 0 ? hist_cost / best_baseline_cost : 1.0;
+                csv.row({dataset, std::to_string(t_idx + 1), std::to_string(aug.n), std::to_string(k),
+                         "hist_" + algo, b_str, heur_name, std::to_string(b_abs), fmt(hist_cost),
+                         fmt(hist_cost), "0", fmt(hist_elapsed), fmt(best_baseline_cost), fmt(hist_ratio), "nan", "nan"});
+            }
 
             auto start = std::chrono::steady_clock::now();
             MappedClustering result;
@@ -454,11 +459,13 @@ int main(int argc, char** argv) {
                      fmt(best_baseline_cost), fmt(relative_ratio),
                      form_prev_points, form_prev_changed, opt_optimal, opt_gap});
 
-            // Propagate this algorithm's resulting centers to the next timestep.
-            std::vector<double> coords((size_t)k * d);
-            for (int c = 0; c < k; ++c)
-                std::memcpy(&coords[(size_t)c * d], aug.row(result.clustering.centers[c]), sizeof(double) * d);
-            algo_coords[a] = std::move(coords);
+            // Propagate the resulting centers of FORM and FID to the next timestep.
+            if (a < algo_coords.size()) {
+                std::vector<double> coords((size_t)k * d);
+                for (int c = 0; c < k; ++c)
+                    std::memcpy(&coords[(size_t)c * d], aug.row(result.clustering.centers[c]), sizeof(double) * d);
+                algo_coords[a] = std::move(coords);
+            }
         }
     }
 

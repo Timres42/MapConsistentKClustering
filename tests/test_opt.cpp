@@ -1,6 +1,6 @@
 // Brute-force check of the exact algorithms in opt.hpp on small random instances:
 // opt_kmedian, opt_fid (benders + classic) and opt_mc must reach the brute-force optimum,
-// and opt_mc <= opt_fid, opt_mc <= FORM, opt_fid <= FID (when FID stays within its budget).
+// and opt_mc <= opt_fid, opt_mc <= FORM, opt_fid <= FID (FID must stay within its budget).
 // Build and run with: make test-opt   (needs Gurobi, see README)
 #include "core.hpp"
 #include "heuristics.hpp"
@@ -50,16 +50,16 @@ static int run_all(int seed,int ntests,int nmin,int nmax){
     OptInfo im; auto rm=opt_mc(P,k,hist,budget,starts,120,0,0,im);
     double cmc=rm.clustering.cost(); int used=cluster_distance(hist,rm.clustering,rm.mapping);
     check("opt_mc",cmc,bm,im,used<=budget && used==im.budget_used);
-    // orderings: opt_mc <= opt_fid, opt_mc <= FORM, opt_fid <= FID (if FID within the variant budget)
+    // orderings: opt_mc <= opt_fid, opt_mc <= FORM, opt_fid <= FID (and FID within its budget)
     auto form=poly_lcc_median_fct(P,k,hist,budget,heur);
     auto fid=poly_lcc_median_f_id(P,k,hist,budget,heur);
     if(cmc>cfid+1e-6||cmc>form.clustering.cost()+1e-6){++order_viol;std::printf("ORDER mc=%.4f fid_opt=%.4f form=%.4f\n",cmc,cfid,form.clustering.cost());}
-    if(center_point_changes(hist,fid.clustering)>budget) ++fid_over;
-    else if(cfid>fid.clustering.cost()+1e-6){++order_viol;std::printf("ORDER fid_opt=%.4f > fid=%.4f\n",cfid,fid.clustering.cost());}
+    if(center_point_changes(hist,fid.clustering)>budget){++fid_over;std::printf("FID over budget b=%d\n",budget);}
+    if(cfid>fid.clustering.cost()+1e-6){++order_viol;std::printf("ORDER fid_opt=%.4f > fid=%.4f\n",cfid,fid.clustering.cost());}
     if(it<4) std::printf("  n=%d k=%d b=%d: opt_mc=%.4f (lp %d rounds, %ld cuts) <= opt_fid=%.4f; FORM=%.4f FID=%.4f\n",
                          n,k,budget,cmc,im.lp_rounds,im.cuts,cfid,form.clustering.cost(),fid.clustering.cost());
   }
-  std::printf("\n%d/%d solves matched brute force; ordering violations: %d; FID over variant budget (skipped): %d\n",total-fails,total,order_viol,fid_over);
-  return fails||order_viol;}
+  std::printf("\n%d/%d solves matched brute force; ordering violations: %d; FID over budget: %d\n",total-fails,total,order_viol,fid_over);
+  return fails||order_viol||fid_over;}
 
 int main() { return run_all(7, 60, 8, 30); }
