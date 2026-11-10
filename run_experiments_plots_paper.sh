@@ -43,6 +43,8 @@ REFERENCE="${REFERENCE:-optimal}"          # cost the ratios are normalized to
 INSTANCES="${INSTANCES:-shared}"           # shared: all algorithms solve FORM's instance
 OPT_TIME_LIMIT="${OPT_TIME_LIMIT:-3600}"   # seconds per Gurobi solve
 OPT_MIP_GAP="${OPT_MIP_GAP:-0}"            # 0 = solve to proven optimality
+# Experiments run only after all others, e.g. DEFER="opt_online_retail_k5_b0.1"
+read -r -a DEFER <<< "${DEFER:-}"
 
 BVIOLIN_B=(0.0 0.01 0.1 0.5 1.0)
 COMBINED_B=(0.0 0.1 0.5)
@@ -120,6 +122,7 @@ run_one() {
   local mode="$1" ds="$2" k="$3" b="$4"
   local key="${mode}_${ds}_k${k}_b${b}"
   [[ -f "$DONE_DIR/$key" ]] && return
+  [[ -z "${RUN_DEFERRED:-}" && " ${DEFER[*]} " == *" $key "* ]] && return
 
   while (( $(jobs -rp | wc -l) >= MAX_JOBS )); do
     sleep 1
@@ -199,6 +202,17 @@ for ds in wildfire online_retail; do
   for b in "${COMBINED_B[@]}"; do
     run_one opt "$ds" 20 "$b"
   done
+done
+wait
+
+# --- Deferred experiments (keys of the form <mode>_<dataset>_k<k>_b<b>). ---
+RUN_DEFERRED=1
+for key in ${DEFER[@]+"${DEFER[@]}"}; do
+  if [[ "$key" =~ ^(no_opt|opt)_(.+)_k([0-9]+)_b([0-9.]+)$ ]]; then
+    run_one "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+  else
+    echo "Ignoring DEFER entry '$key'"
+  fi
 done
 wait
 

@@ -440,7 +440,8 @@ baseline, also as the initial clustering, and all costs are normalized to the ex
 each instance (`--reference optimal`). Only FORM propagates its centers, and all algorithms solve
 FORM's instance (`--instances shared`). `MAX_JOBS`, `OPT_THREADS`, `OPT_TIME_LIMIT`,
 `OPT_MIP_GAP`, `TIMESTEPS`, `RESULTS_ROOT`, `HEURISTICS` (baselines, each tried if the previous
-one fails), `REFERENCE` and `INSTANCES` can be set as environment variables; the plot script takes
+one fails), `REFERENCE`, `INSTANCES` and `DEFER` (experiments to run only after all others, e.g.
+`DEFER="opt_online_retail_k5_b0.1"`) can be set as environment variables; the plot script takes
 `RESULTS_ROOT`, `PLOTS_DIR` and `BASELINES`. The earlier runs with the exact k-median as the
 baseline of FORM and FID are in `results/paper`; their plots are created with
 `RESULTS_ROOT=results/paper BASELINES="optimal kmedianppwpost"`. The runs for FORM's runtime measurements finish before the exact
