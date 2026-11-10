@@ -4,10 +4,12 @@
 set -e
 
 TIMESTEPS="${TIMESTEPS:-30}"
-# The earlier runs with the exact k-median as the baseline of FORM and FID:
-#   RESULTS_ROOT=results/paper BASELINES="optimal kmedianppwpost" PLOTS_DIR=... bash plots/scripts/run_plots_for_paper.sh
-RESULTS_ROOT="${RESULTS_ROOT:-results/paper_kmedianppwpost}"
-PLOTS_DIR="${PLOTS_DIR:-plots/paper}"
+# The setup, as in run_experiments_plots_paper.sh, for example:
+#   INSTANCES=separate BASELINE=optimal bash plots/scripts/run_plots_for_paper.sh
+INSTANCES="${INSTANCES:-shared}"
+BASELINE="${BASELINE:-kmedianppwpost}"
+RESULTS_ROOT="${RESULTS_ROOT:-results/paper_${INSTANCES}_${BASELINE}}"
+PLOTS_DIR="${PLOTS_DIR:-plots/paper/${INSTANCES}_${BASELINE}}"
 OPT_DIR="$RESULTS_ROOT/opt"
 NO_OPT_DIR="$RESULTS_ROOT/no_opt"
 SCALING_DIR="$RESULTS_ROOT/wildfire_node_scaling"
@@ -15,7 +17,7 @@ SCALING_DIR="$RESULTS_ROOT/wildfire_node_scaling"
 DATASETS=(wildfire online_retail household_power twitter uber)
 
 # Baselines of FORM and FID in the result file names, the first one with a result is used.
-read -r -a BASELINES <<< "${BASELINES:-kmedianppwpost}"
+read -r -a BASELINES <<< "${BASELINES:-$BASELINE}"
 
 # Wildfire, k = 5: cost ratio, its distribution and the budget used, one row per b.
 python plots/scripts/plots_propagation_ratio_bviolin_multiple.py \

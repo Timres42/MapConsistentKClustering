@@ -431,23 +431,31 @@ bash run_experiments_plots_paper.sh       # needs a Gurobi build
 bash plots/scripts/run_plots_for_paper.sh
 ```
 
+Both scripts take the setup from two environment variables:
+
+| Variable | Value | Setup |
+|---|---|---|
+| `INSTANCES` | `shared` (default) | Only FORM propagates its centers; FORM, FID, OPT MC and OPT FID all solve FORM's instance |
+| | `separate` | FORM and FID propagate their own centers and solve their own instances; OPT MC solves FORM's instance, OPT FID FID's |
+| `BASELINE` | `kmedianppwpost` (default) | FORM and FID receive `kmedianppwpost`, also as the initial clustering |
+| | `optimal` | FORM and FID receive the exact k-median |
+
+For example, `INSTANCES=separate BASELINE=optimal bash run_experiments_plots_paper.sh`, and the
+same variables for the plot script. All costs are normalized to the exact k-median of each
+instance (`--reference optimal`).
+
 The first script runs exactly the experiments the second one needs and writes them to
-`results/paper_kmedianppwpost` (`no_opt/`, `opt/`, `wildfire_node_scaling/`; logs in `logs/`). It remembers finished
+`results/paper_<INSTANCES>_<BASELINE>` (`no_opt/`, `opt/`, `wildfire_node_scaling/`; logs in `logs/`). It remembers finished
 runs in `.done/`, so running it again continues after an interruption; delete that folder to start
 over. Ctrl+C or killing the script also stops all its running experiments; only `kill -9` cannot be
-handled. Runs that fail are listed at the end. FORM and FID receive the `kmedianppwpost`
-baseline, also as the initial clustering, and all costs are normalized to the exact k-median of
-each instance (`--reference optimal`). Only FORM propagates its centers, and all algorithms solve
-FORM's instance (`--instances shared`). `MAX_JOBS`, `OPT_THREADS`, `OPT_TIME_LIMIT`,
+handled. Runs that fail are listed at the end. `MAX_JOBS`, `OPT_THREADS`, `OPT_TIME_LIMIT`,
 `OPT_MIP_GAP`, `TIMESTEPS`, `RESULTS_ROOT`, `HEURISTICS` (baselines, each tried if the previous
-one fails), `REFERENCE`, `INSTANCES` and `DEFER` (experiments to run only after all others, e.g.
-`DEFER="opt_online_retail_k5_b0.1"`) can be set as environment variables; the plot script takes
-`RESULTS_ROOT`, `PLOTS_DIR` and `BASELINES`. The earlier runs with the exact k-median as the
-baseline of FORM and FID are in `results/paper`; their plots are created with
-`RESULTS_ROOT=results/paper BASELINES="optimal kmedianppwpost"`. The runs for FORM's runtime measurements finish before the exact
+one fails), `REFERENCE` and `DEFER` (experiments to run only after all others, e.g.
+`DEFER="opt_online_retail_k5_b0.1"`) can also be set; the plot script takes `RESULTS_ROOT`,
+`PLOTS_DIR` and `BASELINES`. The runs for FORM's runtime measurements finish before the exact
 algorithms start, so these don't disturb the timings.
 
-The second script writes to `plots/paper`:
+The second script writes to `plots/paper/<INSTANCES>_<BASELINE>`:
 
 | File | Content |
 |---|---|

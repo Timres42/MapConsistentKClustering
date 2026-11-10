@@ -4,14 +4,21 @@
 # Finished runs are remembered in $RESULTS_ROOT/.done, so after an interruption the script
 # continues where it stopped (delete that folder to start over). Logs: $RESULTS_ROOT/logs.
 #
-# FORM and FID receive the kmedianppwpost baseline (also as the initial clustering), and all
-# costs are normalized to the exact k-median of each instance (row opt_kmedian). Only FORM
-# propagates its centers: FORM, FID, OPT MC and OPT FID all solve FORM's instance.
+# The setup is chosen by two variables; each setup has its own results folder
+# results/paper_<INSTANCES>_<BASELINE>:
+#   INSTANCES=shared    only FORM propagates its centers; FORM, FID, OPT MC and OPT FID all
+#                       solve FORM's instance (default)
+#   INSTANCES=separate  FORM and FID propagate their own centers and solve their own instances;
+#                       OPT MC solves FORM's instance, OPT FID FID's
+#   BASELINE=kmedianppwpost  FORM and FID receive kmedianppwpost (also as the initial
+#                            clustering) (default)
+#   BASELINE=optimal         FORM and FID receive the exact k-median
+# All costs are normalized to the exact k-median of each instance (row opt_kmedian, or the
+# baseline itself with BASELINE=optimal).
 #
 # Overrides, for example:
+#   INSTANCES=separate BASELINE=optimal ./run_experiments_plots_paper.sh
 #   MAX_JOBS=4 OPT_TIME_LIMIT=1800 ./run_experiments_plots_paper.sh
-# The earlier runs with the exact k-median as the baseline of FORM and FID are in results/paper;
-# to continue them: RESULTS_ROOT=results/paper HEURISTICS="optimal kmedianppwpost" REFERENCE=baseline INSTANCES=separate
 
 # Stop all experiments when this script ends or is interrupted. Background jobs of a
 # script ignore Ctrl+C, so they have to be stopped explicitly, including their children.
@@ -36,11 +43,16 @@ trap 'stop_experiments; exit 130' INT TERM HUP
 DATASETS=(wildfire online_retail household_power twitter uber)
 
 TIMESTEPS="${TIMESTEPS:-30}"
-RESULTS_ROOT="${RESULTS_ROOT:-results/paper_kmedianppwpost}"
+INSTANCES="${INSTANCES:-shared}"           # shared or separate, see above
+BASELINE="${BASELINE:-kmedianppwpost}"     # optimal or kmedianppwpost, see above
+RESULTS_ROOT="${RESULTS_ROOT:-results/paper_${INSTANCES}_${BASELINE}}"
 # Baselines given to FORM and FID, each tried if the previous one fails.
-read -r -a HEURISTICS <<< "${HEURISTICS:-kmedianppwpost}"
+read -r -a HEURISTICS <<< "${HEURISTICS:-$BASELINE}"
 REFERENCE="${REFERENCE:-optimal}"          # cost the ratios are normalized to
-INSTANCES="${INSTANCES:-shared}"           # shared: all algorithms solve FORM's instance
+if [[ "$INSTANCES" != shared && "$INSTANCES" != separate ]]; then
+  echo "INSTANCES must be shared or separate (got '$INSTANCES')"
+  exit 1
+fi
 OPT_TIME_LIMIT="${OPT_TIME_LIMIT:-3600}"   # seconds per Gurobi solve
 OPT_MIP_GAP="${OPT_MIP_GAP:-0}"            # 0 = solve to proven optimality
 # Experiments run only after all others, e.g. DEFER="opt_online_retail_k5_b0.1"
